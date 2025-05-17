@@ -56,7 +56,104 @@ class WebsiteData(BaseModel):
 
 async def analyze_content(content: str, url: str, schema_products: List[Dict]) -> tuple[str, List[str], List[Dict[str, str]]]:
     try :
-        llm = ChatGoogleGenerativeAI(model="gemini-2.0-pro")
+        llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY)
+        #Chunking
+        chunk_size = 8000
+        chunks = [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
+        print(chunks)
+
+        #Get website description (from first chunk)
+        description_prompt = PromptTemplate(
+            input_variables=["content"],
+            template="""Extract a concise 8-10 sentence website description from this content. 
+            Focus on the core purpose or value proposition. Be specific and avoid generic phrases.
+            Content: {content}"""
+        )
+        description_chain = LLMChain(llm=llm, prompt=description_prompt)
+        description = (await description_chain.arun(content=chunks[0])).strip()
+
+        # Produce audience analysis (use first chunk as it's usually in the introduction)
+        audience_prompt = PromptTemplate(
+            input_variables =["content"],
+            template="Analyze this website content chunk and identify the target audience (e.g., startups, marketers, developers) separated by commas. {content}"
+        )
+        audience_chain = LLMChain(llm=llm, prompt=audience_prompt)
+        target_audience = await audience_chain.arun(content = content)
+        print(target_audience)
+
+        keywords_prompt = PromptTemplate(
+            input_variables=["content"],
+            template="Extract 5-10 key topics or keywords from this content chunk, separated by commas. Focus on unique concepts: {content}"
+        )
+        keywords_chain = LLMChain(llm=llm, prompt=keywords_prompt)
+        
+        keyword_sets = []
+        for chunk in chunks:
+            chunk_keywords = (await keywords_chain.arun(content=chunk)).split(", ")
+            keyword_sets.append(set(kw.strip().lower() for kw in chunk_keywords))
+
+        combined_keywords = set()
+        for kw_set in keyword_sets:
+            combined_keywords.update(kw_set)
+        final_keywords = list(combined_keywords)  # We can take top 10 most frequent if needed
+        
+        print(final_keywords)
+
+        # Process products across all chunks and merge
+        products_prompt = PromptTemplate(
+            input_variables=["content"],
+            template="""
+        You are an intelligent assistant designed to extract product and service information from text.
+
+        Your task is to carefully read the provided content and return a **JSON array** of unique products or services explicitly or implicitly mentioned.
+
+        Each product/service should be represented as an object with the following fields:
+        - "name": The clear name of the product/service.
+        - "description": A short and concise description in plain English.
+        - "price": The price mentioned in the text. If no price is available, use "N/A".
+        - "category": The general category it belongs to (e.g., "software", "hardware", "consulting service", "SaaS", "API", "platform", etc.)
+
+        ### Rules:
+        1. Only extract **products/services** — not features, companies, or general terms.
+        2. Do **not** repeat any previously mentioned products/services.
+        3. If there is ambiguity (e.g. no name but a description), infer a generic name like `"Unnamed cloud backup service"` and still include it.
+        4. Maintain a JSON array output only — do not include any explanation or extra text.
+        {content}
+            """
+        )
+        products_chain = LLMChain(llm=llm, prompt=products_prompt)
+        all_products = schema_products.copy()
+        seen_products = set(p["name"].lower() for p in schema_products)
+        for chunk in chunks:
+            raw_response = await products_chain.ainvoke({"content": chunk})
+            try:
+                json_string = re.sub(r'^```json|```$', '', raw_response['text'].strip()).strip()
+                chunk_products = json.loads(json_string)
+                for product in chunk_products:
+                    if product["name"].lower() not in seen_products:
+                        all_products.append(product)
+                        seen_products.add(product["name"].lower())
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.warning(f"Product parsing failed for chunk: {str(e)}")
+                continue
+            
+        logger.info("Content analyzed with chunking", 
+                   url=url, 
+                   chunks=len(chunks),
+                   audience=target_audience, 
+                   keywords=len(final_keywords),
+                   products=len(all_products))
+
+
+        return (
+            description,
+            target_audience,
+            final_keywords,
+            all_products
+        )
+    except Exception as e:
+        logger.error("Gemini analysis failed", url=url, error=str(e))
+        raise HTTPException(status_code=500, detail=f"Gemini API error: {str(e)}")
 
 def find_product_service_links(soup: BeautifulSoup, base_url: str) -> List[str]:
     keywords = ["products", "services", "offerings", "solutions", "shop"]
@@ -137,6 +234,7 @@ async def get_async_session():
     return aiohttp.ClientSession(headers={
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     })
+
 async def scrape_website(url:str) -> Dict:
     if not is_valid_url(url):
         logger.error("Invalid URL", url=url)
@@ -168,7 +266,17 @@ async def scrape_website_data(input : WebsiteInput, db: AsyncSession =Depends(ge
 
     try:
         scraped_data = await scrape_website(input.url)
+        description, target_audience, keywords, products_services = await analyze_content(scraped_data["content"],input.url, scraped_data["schema_products"])
+        result = WebsiteData(
+            url=input.url,
+            title=scraped_data["title"],
+            description=description,
+            target_audience=target_audience,
+            keywords=keywords,
+            products_services=products_services
+        )
         logger.info("Website processing completed", url = input.url)
+        return result
     
     except Exception as e:
         logger.error("Website processing failed", url=input.url, error=str(e))
