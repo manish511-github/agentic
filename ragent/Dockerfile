@@ -16,6 +16,7 @@ ENV PYTHONPATH=/app
 # Copy requirements and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install watchgod
 
 # Copy application code and Alembic migrations
 COPY . .
@@ -23,5 +24,5 @@ COPY . .
 # Expose port
 EXPOSE 8000
 
-# Command to run migrations and app
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# Command to run migrations and app with auto-reload
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app"]

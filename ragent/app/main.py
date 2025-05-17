@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 from app.agent import router as agent_router
 from app.database import init_db
 import math
-from .hello import hello
 
 # Initialize logging
 structlog.configure(
@@ -32,12 +31,11 @@ async def startup_event():
     redis_client = redis.from_url(REDIS_URL)
     await FastAPILimiter.init(redis_client)
     await init_db()
-    hello()
-    logger.info("Rate limiter addddddnd database initialized")
+    logger.info("Rate limiter addddddndffdddddd database initialized")
 
 # Mount router
 app.include_router(agent_router)
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+# if __name__ == "__main__":
+#     import uvicorn
+#     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
