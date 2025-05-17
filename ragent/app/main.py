@@ -5,6 +5,7 @@ import structlog
 import os
 from dotenv import load_dotenv
 from app.agent import router as agent_router
+from app.rdagent import router as rdagent_router
 from app.database import init_db
 import math
 
@@ -35,6 +36,7 @@ async def startup_event():
 
 # Mount router
 app.include_router(agent_router)
+app.include_router(rdagent_router)
 
 # if __name__ == "__main__":
 #     import uvicorn

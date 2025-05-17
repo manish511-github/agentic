@@ -20,7 +20,6 @@ import re
 from tenacity import retry, stop_after_attempt, wait_fixed
 import structlog
 import json
-import praw
 from datetime import datetime, timedelta
 import asyncio
 from app.models import WebsiteDataModel, RedditPostModel
@@ -53,6 +52,24 @@ class WebsiteData(BaseModel):
     target_audience: str
     keywords: List[str]
     products_services: List[Dict[str, str]]
+
+async def store_website_results(url:str, data: WebsiteData, db: AsyncSession):
+    try:
+        website_data = WebsiteDataModel(
+            url=data.url,
+            title=data.title,
+            description=data.description,
+            target_audience=data.target_audience,
+            keywords=data.keywords,
+            products_services=data.products_services
+        )
+        async with db.begin():
+            db.add(website_data)
+            await db.commit()
+        logger.info("Stored website results in DB", url=url)
+    except IntegrityError as e:
+        logger.error("Database error", url=url, error=str(e))
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 async def analyze_content(content: str, url: str, schema_products: List[Dict]) -> tuple[str, List[str], List[Dict[str, str]]]:
     try :
@@ -275,6 +292,7 @@ async def scrape_website_data(input : WebsiteInput, db: AsyncSession =Depends(ge
             keywords=keywords,
             products_services=products_services
         )
+        await store_website_results(input.url, result, db)
         logger.info("Website processing completed", url = input.url)
         return result
     

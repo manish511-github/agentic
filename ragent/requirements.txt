@@ -20,4 +20,4 @@ asyncpg==0.29.0
 alembic==1.13.1
 redis==5.0.0
 structlog==23.1.0
-praw==7.7.1
+asyncpraw
