@@ -6,6 +6,8 @@ import os
 from dotenv import load_dotenv
 from app.agent import router as agent_router
 from app.database import init_db
+import math
+from .hello import hello
 
 # Initialize logging
 structlog.configure(
@@ -30,7 +32,7 @@ async def startup_event():
     redis_client = redis.from_url(REDIS_URL)
     await FastAPILimiter.init(redis_client)
     await init_db()
-    logger.info("hello")
+    hello()
     logger.info("Rate limiter addddddnd database initialized")
 
 # Mount router
