@@ -646,22 +646,24 @@ async def safe_gemini_call(llm: ChatGoogleGenerativeAI, prompt: str) -> str:
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 async def fetch_posts_node(state: AgentState) -> AgentState:
-    """Optimized Reddit post fetcher with integrated rate limiting and error handling."""
     if state.get("error"):
         return state
 
     start_time = datetime.utcnow()
     state["posts"] = []
-    
+
     try:
-        # Initialize components
-        patterns = generate_patterns(state["description"], state["target_audience"])
-        gemini_semaphore = asyncio.Semaphore(GEMINI_RATE_LIMIT)
-        
+        # Validate goals
+        valid_goals = ["increase brand awareness", "engage potential customers", "grow web traffic"]
+        if not all(g in valid_goals for g in state["goals"]):
+            state["error"] = f"Invalid goals: {[g for g in state['goals'] if g not in valid_goals]}"
+            logger.error("Invalid goals", agent_name=state["agent_name"], invalid_goals=[g for g in state["goals"] if g not in valid_goals])
+            return state
+
         # Initialize LLM with error handling
         if not os.getenv("GOOGLE_API_KEY"):
             raise ValueError("GOOGLE_API_KEY environment variable not set")
-            
+        
         llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-flash",
             google_api_key=os.getenv("GOOGLE_API_KEY"),
@@ -671,100 +673,151 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
 
         async with await get_reddit_client() as reddit:
             cutoff_time = datetime.utcnow() - timedelta(days=state["max_age_days"])
-            
+            BATCH_SIZE = 3  # Process 3 subreddits at a time
+            MAX_POSTS_PER_SUBREDDIT = 5  # Focus on quality
+            DELAY_BETWEEN_BATCHES = 1.0
+
             async def process_subreddit(subreddit_name: str) -> List[Dict]:
-                """Process individual subreddit with error handling."""
+                """Process subreddit with LLM-based relevance scoring."""
                 posts = []
                 try:
-                    if not await is_relevant_subreddit(reddit, subreddit_name, patterns):
-                        return posts
-                        
                     subreddit = await reddit.subreddit(subreddit_name)
                     listings = [
-                        ('hot', subreddit.hot(limit=50)),
-                        ('new', subreddit.new(limit=50)),
-                        ('top', subreddit.top('week', limit=50))
+                        ('hot', subreddit.hot(limit=25)),
+                        ('new', subreddit.new(limit=25)),
+                        ('top', subreddit.top('week', limit=25))
                     ]
-
+                    print(listings)
+                    # Collect candidate posts
+                    candidates = []
                     for sort_method, listing in listings:
                         async for submission in listing:
-                            if (submission.score < state["min_upvotes"] or 
-                                datetime.utcfromtimestamp(submission.created_utc) < cutoff_time or
-                                submission.stickied):
-                                continue
+                            candidates.append({
+                                "submission": submission,
+                                "sort_method": sort_method,
+                                "title": submission.title,
+                                "selftext": submission.selftext
+                            })
+                    print(listings)
+                    if not candidates:
+                        return posts
 
-                            content = f"{submission.title}\n{submission.selftext}".lower()
-                            matches = {
-                                'solution': len(patterns['solution_terms'].findall(content)) if patterns['solution_terms'] else 0,
-                                'feature': len(patterns['feature_terms'].findall(content)) if patterns['feature_terms'] else 0,
-                                'audience': len(patterns['audience_terms'].findall(content)) if patterns['audience_terms'] else 0,
-                                'problem': len(patterns['problem_terms'].findall(content)),
-                                'is_question': bool(patterns['question_terms'].search(submission.title))
-                            }
+                    # Cache key for LLM results
+                    cache_key = f"posts:{subreddit_name}:{hashlib.sha256((state['expectation'] + ','.join(state['goals']) + state['description'] + ','.join([c['title'] + c['selftext'] for c in candidates])).encode()).hexdigest()}"
+                    # cached_posts = await redis_client.get(cache_key)
+                    cached_posts =None
+                    if cached_posts:
+                        logger.info("Cache hit for posts", subreddit=subreddit_name)
+                        posts = json.loads(cached_posts)
+                    else:
+                        # LLM prompt for batch scoring
+                        prompt = (
+                            f"Score the relevance (0-1, float) of each post for a product with the following details:\n"
+                            f"Product Description: {state['description']}\n"
+                            f"Goals: {', '.join(state['goals'])} (ensure posts support these marketing objectives)\n"
+                            f"Expectation: {state['expectation']} (posts should match this content focus)\n"
+                            f"Target Audience: {state['target_audience']}\n"
+                            f"Keywords: {', '.join(state['company_keywords'])}\n\n"
+                            "Posts:\n" +
+                            "\n".join([
+                                f"Post {i}: {c['title']}\n{c['selftext'][:500]}"
+                                for i, c in enumerate(candidates, 1)
+                            ]) +
+                            f"\n\nReturn ONLY a JSON-formatted list of relevance scores (0-1 floats), "
+                            f"one for each post listed above. You must return exactly {len(candidates)} scores in the same order as the posts. "
+                            "Do not include any explanations, extra text, or Markdown. Just return the list.\n"
+                            "Example:\n[0.7, 0.3, 0.9, 0.5]"
+                        )
 
-                            relevance_score = (
-                                0.25 * min(1, matches['solution'] / 2) +
-                                0.25 * min(1, matches['feature'] / 2) +
-                                0.20 * min(1, matches['audience'] / 2) +
-                                0.20 * min(1, matches['problem'] / 2) +
-                                0.10 * matches['is_question']
-                            )
+                        try:
+                            response = await safe_gemini_call(llm, prompt)
+                            cleaned_response = re.sub(r'^```json\n|\n```$', '', response.strip())
+                            scores = json.loads(cleaned_response)
 
-                            if relevance_score >= 0.7:
-                                try:
-                                    async with gemini_semaphore:
-                                        await asyncio.sleep(random.uniform(0.1, 0.5))  # Add jitter
-                                        prompt = f"Verify (yes/no) if this relates to {state['company_keywords'][0]}:\nPost: {content[:500]}"
-                                        response = await safe_gemini_call(llm, prompt)
-                                        if response.startswith('y'):
-                                            posts.append(create_post_dict(submission, subreddit_name, relevance_score, matches, sort_method))
-                                except Exception:
-                                    if relevance_score >= 0.9:
-                                        posts.append(create_post_dict(submission, subreddit_name, relevance_score, matches, sort_method))
-                            elif relevance_score >= 0.8:
-                                posts.append(create_post_dict(submission, subreddit_name, relevance_score, matches, sort_method))
+                            # if len(scores) != len(candidates):
+                            #     logger.info(f"Score length: {len(scores)}, Candidate length: {len(candidates)}")
+                            #     raise ValueError("Mismatch in scores length")
+                            
+                            # Filter posts with score >= 0.75
+                            for candidate, score in zip(candidates, scores):
+                                if isinstance(score, (int, float)) and score >= 0.3:
+                                    submission = candidate["submission"]
+                                    posts.append({
+                                        "subreddit": subreddit_name,
+                                        "post_id": submission.id,
+                                        "post_title": submission.title,
+                                        "post_body": submission.selftext,
+                                        "post_url": f"https://www.reddit.com{submission.permalink}",
+                                        "relevance_score": score,
+                                        "comment_count": submission.num_comments,
+                                        "upvote_comment_ratio": submission.score / max(1, submission.num_comments),
+                                        "upvotes": submission.score,
+                                        "created": datetime.utcfromtimestamp(submission.created_utc).isoformat(),
+                                        "sort_method": candidate["sort_method"]
+                                    })
+                                    
 
-                            if len(posts) >= MAX_POSTS_PER_SUBREDDIT:
-                                break
+                        except Exception as e:
+                            logger.warning(f"LLM scoring failed for {subreddit_name}: {str(e)}")
+                            # Fallback: Keyword matching
+                            for candidate in candidates:
+                                content = (candidate["title"] + " " + candidate["selftext"]).lower()
+                                score = sum(1 for kw in state["company_keywords"] if kw.lower() in content) / max(1, len(state["company_keywords"]))
+                                if score >= 0.75:
+                                    submission = candidate["submission"]
+                                    posts.append({
+                                        "subreddit": subreddit_name,
+                                        "post_id": submission.id,
+                                        "post_title": submission.title,
+                                        "post_body": submission.selftext,
+                                        "post_url": f"https://www.reddit.com{submission.permalink}",
+                                        "relevance_score": score,
+                                        "hybrid_score": score,
+                                        "comment_count": submission.num_comments,
+                                        "upvote_comment_ratio": submission.score / max(1, submission.num_comments),
+                                        "upvotes": submission.score,
+                                        "created": datetime.utcfromtimestamp(submission.created_utc).isoformat(),
+                                        "sort_method": candidate["sort_method"]
+                                    })
+
+                        # Limit to MAX_POSTS_PER_SUBREDDIT
+                        # posts = sorted(posts, key=lambda x: x["relevance_score"], reverse=True)[:MAX_POSTS_PER_SUBREDDIT]
+                        # await redis_client.setex(cache_key, 3600, json.dumps(posts))
+
+                    return posts
 
                 except Exception as e:
                     logger.warning(f"Error processing {subreddit_name}: {str(e)}")
-                    raise
-                
-                return posts
+                    return posts
 
-            # Process subreddits in optimized batches
-            relevant_subreddits = [
-                s for s in state["subreddits"] 
-                if await is_relevant_subreddit(reddit, s, patterns)
-            ]
-            
-            for i in range(0, len(relevant_subreddits), BATCH_SIZE):
-                batch = relevant_subreddits[i:i + BATCH_SIZE]
+            # Process subreddits in batches
+            for i in range(0, len(state["subreddits"]), BATCH_SIZE):
+                batch = state["subreddits"][i:i + BATCH_SIZE]
                 results = await asyncio.gather(
                     *(process_subreddit(name) for name in batch),
                     return_exceptions=True
                 )
-                
+
                 for result in results:
                     if isinstance(result, list):
                         state["posts"].extend(result)
                     elif isinstance(result, Exception):
                         logger.error(f"Batch processing error: {str(result)}")
-                
-                if i + BATCH_SIZE < len(relevant_subreddits):
+
+                if i + BATCH_SIZE < len(state["subreddits"]):
                     await asyncio.sleep(DELAY_BETWEEN_BATCHES)
 
-            # Sort and limit results
+            # Sort and limit final results
             state["posts"] = sorted(
                 state["posts"],
-                key=lambda x: (-x['relevance'], -x['matches']['audience'], -x['upvotes'], -x['created'])
-            )[:30]
-            print(state["posts"])
+                key=lambda x: (x["relevance_score"], x["upvotes"], x["created"]),
+                reverse=True
+            )
             logger.info(
                 "Posts fetched successfully",
                 agent_name=state["agent_name"],
                 post_count=len(state["posts"]),
+                posts=state["posts"],
                 duration_sec=(datetime.utcnow() - start_time).total_seconds()
             )
 
@@ -778,7 +831,9 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
         )
 
     return state
-    
+
+
+
 def create_graph():
     graph = StateGraph(AgentState)
 
