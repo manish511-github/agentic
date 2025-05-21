@@ -23,7 +23,6 @@ from dotenv import load_dotenv
 from urllib.parse import urljoin
 import re
 from tenacity import retry, stop_after_attempt, wait_fixed,wait_exponential
-import spacy
 import structlog
 import json
 import asyncpraw
@@ -32,12 +31,7 @@ from datetime import datetime, timedelta
 import asyncio
 from app.models import WebsiteDataModel, RedditPostModel
 from app.database import get_db
-from sentence_transformers import SentenceTransformer
-from sklearn.cluster import KMeans
-from sklearn.feature_extraction.text import TfidfVectorizer
-from scipy.spatial.distance import cosine
-
-embedding_model = SentenceTransformer('paraphrase-MiniLM-L12-v2')
+from functools import lru_cache
 
 # Initialize logging
 import logging
@@ -161,20 +155,6 @@ async def get_reddit_client():
     )
     return reddit
 
-async def analyze_sentiment(content: str) -> float:
-    try:
-        llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY)
-        sentiment_prompt = PromptTemplate(
-            input_variables=["content"],
-            template="Analyze the sentiment of the following text and return a score between -1 (negative) and 1 (positive): {content}"
-        )
-        sentiment_chain = LLMChain(llm=llm, prompt=sentiment_prompt)
-        score = float(await sentiment_chain.arun(content=content))
-        return max(min(score, 1.0), -1.0)
-    except Exception as e:
-        logger.warning("Sentiment analysis failed", error=str(e))
-        return 0.0
-    
 async def validate_input_node(state: AgentState) -> AgentState:
     valid_goals = ["increase brand awareness", "engage potential customers", "grow web traffic"]
     if not all(goal.lower() in valid_goals for goal in state["goals"]):
@@ -185,49 +165,6 @@ async def validate_input_node(state: AgentState) -> AgentState:
     state["posts"] = []
     logger.info("Input validated", agent_name=state["agent_name"])
     return state
-
-
-async def score_posts_node(state: AgentState) -> AgentState:
-    if state.get("error"):
-        return state
-    try:
-        scored_posts = []
-        company_keywords = [kw.lower() for kw in state["company_keywords"]]
-        
-        # Filter posts that meet minimum relevance first (without sentiment)
-        filtered_posts = []
-        # for post in state["posts"]:
-        #     content = f"{post['post_title']} {post['post_body']}".lower()
-        #     matches = sum(1 for kw in company_keywords if kw in content)
-        #     relevance_score = matches / max(len(company_keywords), 1)
-        #     if relevance_score > 0.0:
-        #         print(relevance_score)
-        #         # print(content)
-        #         post["relevance_score"] = relevance_score
-        #         filtered_posts.append((post, content))
-        # Prepare coroutines for sentiment analysis
-        # sentiment_tasks = [analyze_sentiment(content) for _, content in filtered_posts]
-        # sentiment_scores = await asyncio.gather(*sentiment_tasks, return_exceptions=True)
-        
-        # for (post, _), sentiment_score in zip(filtered_posts, sentiment_scores):
-        #     # Handle possible exceptions from analyze_sentiment
-        #     if isinstance(sentiment_score, Exception):
-        #         logger.warning("Sentiment analysis failed for a post", error=str(sentiment_score))
-        #         continue
-        #     if sentiment_score >= 0:
-        #         post["sentiment_score"] = sentiment_score
-        #         scored_posts.append(post)
-
-        # Sort and keep top 10 by relevance
-        # state["posts"] = sorted(scored_posts, key=lambda x: x["relevance_score"], reverse=True)[:10]
-        # import pprint
-        # pprint.pprint(filtered_posts)
-        logger.info("Posts scored", agent_name=state["agent_name"], post_count=len(state["posts"]))
-    except Exception as e:
-        state["error"] = f"Post scoring failed: {str(e)}"
-        logger.error("Post scoring failed", agent_name=state["agent_name"], error=str(e))
-    return state
-
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=60))
 async def generate_keywords(keywords: List[str], expectation: str) -> List[str]:
@@ -260,35 +197,6 @@ async def generate_keywords(keywords: List[str], expectation: str) -> List[str]:
         logger.warning("Keyword expansion failed", error=str(e))
         return keywords
 
-
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=60))
-async def analyze_generative_relevance(content: str, expectation: str, keywords: List[str]) -> float:
-    content = content[:2000]
-    cache_key = f"generative_relevance:{hashlib.sha256((content + expectation).encode()).hexdigest()}"
-    # cached_result = await redis_client.get(cache_key)
-    # if cached_result:
-    #     logger.info("Cache hit for generative relevance")
-    #     return float(cached_result)
-    try:
-        llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-lite", google_api_key=GOOGLE_API_KEY)
-        relevance_prompt = PromptTemplate(
-            input_variables=["content", "expectation", "keywords"],
-            template=(
-            "On a scale from 0 to 1, where 1 is highly relevant and 0 is not relevant at all, "
-            "rate how relevant the following content is to the expectation '{expectation}' and the keywords '{keywords}'.\n\n"
-            "IMPORTANT: Respond with ONLY a single number between 0 and 1 (e.g., 0.75) and NOTHING ELSE - no explanations, no formatting, no text.\n\n"
-            "Content:\n{content}"
-            )
-        )
-        relevance_chain = LLMChain(llm=llm, prompt=relevance_prompt)
-        score = float(await relevance_chain.arun(content=content, expectation=expectation, keywords=", ".join(keywords)))
-        score = max(min(score, 1.0), 0.0)
-        # await redis_client.setex(cache_key, 3600, str(score))
-        return score
-    except Exception as e:
-        logger.warning("Generative relevance analysis failed", error=str(e))
-        return 0.0
-    
 async def search_subreddits_node(state: AgentState) -> AgentState:
     if state.get("error"):
         return state
@@ -539,7 +447,6 @@ async def search_subreddits_node(state: AgentState) -> AgentState:
     return state
 
 
-from functools import lru_cache
 
 REDDIT_RATE_LIMIT = 60  # Reddit API calls per minute
 GEMINI_RATE_LIMIT = 15  # Gemini free tier limit per minute
@@ -547,93 +454,6 @@ MAX_POSTS_PER_SUBREDDIT = 5
 BATCH_SIZE = 5
 DELAY_BETWEEN_BATCHES = 3
 
-
-@lru_cache(maxsize=32)
-def generate_patterns(description: str, audience: str) -> Dict[str, re.Pattern]:
-    """Dynamically generate regex patterns from product description and target audience."""
-    nlp = spacy.load("en_core_web_sm")
-    doc = nlp(description.lower())
-    
-    solution_terms = set()
-    feature_terms = set()
-    audience_terms = set()
-
-    # Extract solution terms and features
-    for token in doc:
-        if token.pos_ == "VERB" and len(token.lemma_) > 3:
-            solution_terms.add(token.lemma_)
-        elif token.pos_ == "NOUN" and len(token.text) > 3:
-            feature_terms.add(token.text)
-
-    for chunk in doc.noun_chunks:
-        if len(chunk.text) > 5:
-            feature_terms.add(chunk.text)
-
-    # Process audience roles
-    for role in audience.split(','):
-        role = role.strip().lower()
-        if role:
-            role_doc = nlp(role)
-            audience_terms.update(
-                tok.lemma_ for tok in role_doc 
-                if not tok.is_stop and not tok.is_punct and len(tok.text) > 2
-            )
-
-    return {
-        'solution_terms': re.compile(
-            r'\b(' + '|'.join(map(re.escape, solution_terms)) + r')\b',
-            re.IGNORECASE
-        ) if solution_terms else None,
-        'feature_terms': re.compile(
-            r'\b(' + '|'.join(map(re.escape, feature_terms)) + r')\b',
-            re.IGNORECASE
-        ) if feature_terms else None,
-        'audience_terms': re.compile(
-            r'\b(' + '|'.join(map(re.escape, audience_terms)) + r')\b',
-            re.IGNORECASE
-        ) if audience_terms else None,
-        'problem_terms': re.compile(
-            r'\b(struggl|challeng|difficult|issue|problem|pain|complex|'
-            r'frustrat|hard to|insecure|vulnerable|breach|hack|complian|'
-            r'requirement|need|looking for|searching|want|require|'
-            r'improve|better|alternative|recommend|compare|evaluat)\b',
-            re.IGNORECASE
-        ),
-        'question_terms': re.compile(
-            r'^(what|how|why|where|which|who|can|does|do|is|are|will|'
-            r'should|could|would|has|have)\b|\?',
-            re.IGNORECASE
-        )
-    }
-
-def create_post_dict(submission, subreddit_name, relevance_score, matches, sort_method) -> Dict:
-    """Helper to create standardized post dictionary."""
-    return {
-        'subreddit': subreddit_name,
-        'post_id': submission.id,
-        'title': submission.title,
-        'body': submission.selftext,
-        'url': f"https://www.reddit.com{submission.permalink}",
-        'upvotes': submission.score,
-        'created': submission.created_utc,
-        'relevance': relevance_score,
-        'matches': matches,
-        'sort': sort_method,
-        'verified': relevance_score >= 0.7
-    }
-
-async def is_relevant_subreddit(reddit, subreddit_name: str, patterns: Dict) -> bool:
-    """Check if subreddit is likely to contain relevant content."""
-    try:
-        subreddit = await reddit.subreddit(subreddit_name)
-        description = (await subreddit.description()).lower()
-        return any(
-            pattern.search(description) 
-            for pattern in patterns.values() 
-            if pattern
-        )
-    except Exception:
-        return True  # Default to processing if we can't check
 
 async def safe_gemini_call(llm: ChatGoogleGenerativeAI, prompt: str) -> str:
     """Make rate-limited Gemini API call."""
@@ -832,6 +652,33 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
 
     return state
 
+async def store_results_node(state: AgentState) -> AgentState:
+    if state.get("error"):
+        return state
+    import rpdb;
+    rpdb.set_trace()
+    try:
+        db = state["db"]
+        async with db.begin():
+            for post in state["posts"]:
+                reddit_post = RedditPostModel(
+                    agent_name=state["agent_name"],
+                    goals=state["goals"],
+                    instructions=state["instructions"],
+                    subreddit=post["subreddit"],
+                    post_id=post["post_id"],
+                    post_title=post["post_title"],
+                    post_body=post["post_body"],
+                    post_url=post["post_url"],
+                    relevance_score=post["relevance_score"],
+                )
+                db.add(reddit_post)
+            await db.commit()
+        logger.info("Stored Reddit posts", agent_name=state["agent_name"], post_count=len(state["posts"]))
+    except Exception as e:
+        state["error"] = f"Database error: {str(e)}"
+        logger.error("Database error", agent_name=state["agent_name"], error=str(e))
+    return state
 
 
 def create_graph():
@@ -840,15 +687,15 @@ def create_graph():
     graph.add_node("validate_input", validate_input_node)
     graph.add_node("search_subreddits", search_subreddits_node)
     graph.add_node("fetch_posts", fetch_posts_node)
-    graph.add_node("score_posts", score_posts_node)
+    graph.add_node("store_results", store_results_node)
 
     graph.set_entry_point("validate_input")
     
     graph.add_edge("validate_input", "search_subreddits")
     graph.add_edge("search_subreddits", "fetch_posts")
-    graph.add_edge("fetch_posts", "score_posts")
+    graph.add_edge("fetch_posts", "store_results")
 
-    graph.add_edge("score_posts", END)
+    graph.add_edge("store_results", END)
     return graph.compile()
 
 reddit_graph = create_graph()

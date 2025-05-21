@@ -18,8 +18,7 @@ ENV PYTHONPATH=/app
 # Copy requirements and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
- && pip install --no-cache-dir watchgod \
- && python -m spacy download en_core_web_sm
+ && pip install --no-cache-dir watchgod
 # Copy application code and Alembic migrations
 COPY . .
 

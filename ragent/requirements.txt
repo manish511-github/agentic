@@ -22,9 +22,3 @@ redis==5.0.0
 structlog==23.1.0
 asyncpraw
 asyncprawcore
-spacy
-
-sentence-transformers==3.2.0
-scikit-learn==1.5.2
-numpy>=1.26.4,<2
-scipy==1.14.1
