@@ -52,6 +52,7 @@ class WebsiteData(BaseModel):
     target_audience: str
     keywords: List[str]
     products_services: List[Dict[str, str]]
+    main_category: Optional[str] = None # Added main_category field
 
 async def store_website_results(url:str, data: WebsiteData, db: AsyncSession):
     try:
@@ -61,7 +62,8 @@ async def store_website_results(url:str, data: WebsiteData, db: AsyncSession):
             description=data.description,
             target_audience=data.target_audience,
             keywords=data.keywords,
-            products_services=data.products_services
+            products_services=data.products_services,
+            main_category=data.main_category # Store main_category
         )
         async with db.begin():
             db.add(website_data)
@@ -71,7 +73,7 @@ async def store_website_results(url:str, data: WebsiteData, db: AsyncSession):
         logger.error("Database error", url=url, error=str(e))
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
-async def analyze_content(content: str, url: str, schema_products: List[Dict]) -> tuple[str, List[str], List[Dict[str, str]]]:
+async def analyze_content(content: str, url: str, schema_products: List[Dict]) -> tuple[str, str, List[str], List[Dict[str, str]], str]: # Updated return type hint
     try :
         llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY)
         #Chunking
@@ -161,12 +163,22 @@ async def analyze_content(content: str, url: str, schema_products: List[Dict]) -
                    keywords=len(final_keywords),
                    products=len(all_products))
 
+        # Get main category
+        main_category_prompt = PromptTemplate(
+            input_variables=["content"],
+            template="""Analyze the following website content and identify the single most relevant main category that describes the website's primary focus or the main product/service it offers. Provide only the category name, e.g., 'E-commerce', 'SaaS', 'Blog', 'Marketing Agency', 'Education Platform', 'Fintech', 'Healthcare', 'Portfolio', 'News', 'Community Forum', 'Consulting Services', 'Software Development', 'Hardware Products'. If unsure, provide a best guess from common website categories. Do not include any other text or explanation.
+            Content: {content}"""
+        )
+        main_category_chain = LLMChain(llm=llm, prompt=main_category_prompt)
+        main_category = (await main_category_chain.arun(content=chunks[0])).strip() # Use the first chunk for main category
+
 
         return (
             description,
             target_audience,
             final_keywords,
-            all_products
+            all_products,
+            main_category # Added main_category to return value
         )
     except Exception as e:
         logger.error("Gemini analysis failed", url=url, error=str(e))
@@ -283,14 +295,16 @@ async def scrape_website_data(input : WebsiteInput, db: AsyncSession =Depends(ge
 
     try:
         scraped_data = await scrape_website(input.url)
-        description, target_audience, keywords, products_services = await analyze_content(scraped_data["content"],input.url, scraped_data["schema_products"])
+        # Updated unpacking to include main_category
+        description, target_audience, keywords, products_services, main_category = await analyze_content(scraped_data["content"],input.url, scraped_data["schema_products"])
         result = WebsiteData(
             url=input.url,
             title=scraped_data["title"],
             description=description,
             target_audience=target_audience,
             keywords=keywords,
-            products_services=products_services
+            products_services=products_services,
+            main_category=main_category # Pass main_category to WebsiteData
         )
         await store_website_results(input.url, result, db)
         logger.info("Website processing completed", url = input.url)
@@ -299,3 +313,4 @@ async def scrape_website_data(input : WebsiteInput, db: AsyncSession =Depends(ge
     except Exception as e:
         logger.error("Website processing failed", url=input.url, error=str(e))
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
+
