@@ -81,44 +81,22 @@ async def analyze_content(content: str, url: str, schema_products: List[Dict]) -
         chunks = [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
         print(chunks)
 
-        #Get website description (from first chunk)
+
+        # Define prompt templates
         description_prompt = PromptTemplate(
             input_variables=["content"],
-            template="""Extract a concise 8-10 sentence website description from this content. 
+            template="""Extract a concise 8-10 sentence website description from this content.
             Focus on the core purpose or value proposition. Be specific and avoid generic phrases.
             Content: {content}"""
         )
-        description_chain = LLMChain(llm=llm, prompt=description_prompt)
-        description = (await description_chain.arun(content=chunks[0])).strip()
-
-        # Produce audience analysis (use first chunk as it's usually in the introduction)
         audience_prompt = PromptTemplate(
-            input_variables =["content"],
+            input_variables=["content"],
             template="Analyze this website content chunk and identify the target audience (e.g., startups, marketers, developers) separated by commas. {content}"
         )
-        audience_chain = LLMChain(llm=llm, prompt=audience_prompt)
-        target_audience = await audience_chain.arun(content = content)
-        print(target_audience)
-
         keywords_prompt = PromptTemplate(
             input_variables=["content"],
             template="Extract 5-10 key topics or keywords from this content chunk, separated by commas. Focus on unique concepts: {content}"
         )
-        keywords_chain = LLMChain(llm=llm, prompt=keywords_prompt)
-        
-        keyword_sets = []
-        for chunk in chunks:
-            chunk_keywords = (await keywords_chain.arun(content=chunk)).split(", ")
-            keyword_sets.append(set(kw.strip().lower() for kw in chunk_keywords))
-
-        combined_keywords = set()
-        for kw_set in keyword_sets:
-            combined_keywords.update(kw_set)
-        final_keywords = list(combined_keywords)  # We can take top 10 most frequent if needed
-        
-        print(final_keywords)
-
-        # Process products across all chunks and merge
         products_prompt = PromptTemplate(
             input_variables=["content"],
             template="""
@@ -140,37 +118,92 @@ async def analyze_content(content: str, url: str, schema_products: List[Dict]) -
         {content}
             """
         )
+        main_category_prompt = PromptTemplate(
+            input_variables=["content"],
+            template="""Analyze the following website content and identify the single most relevant main category that describes the website's primary focus or the main product/service it offers. Provide only the category name, e.g., 'E-commerce', 'SaaS', 'Blog', 'Marketing Agency', 'Education Platform', 'Fintech', 'Healthcare', 'Portfolio', 'News', 'Community Forum', 'Consulting Services', 'Software Development', 'Hardware Products'. If unsure, provide a best guess from common website categories. Do not include any other text or explanation.
+            Content: {content}"""
+        )
+
+        # Initialize LLM chains
+        description_chain = LLMChain(llm=llm, prompt=description_prompt)
+        audience_chain = LLMChain(llm=llm, prompt=audience_prompt)
+        keywords_chain = LLMChain(llm=llm, prompt=keywords_prompt)
         products_chain = LLMChain(llm=llm, prompt=products_prompt)
+        main_category_chain = LLMChain(llm=llm, prompt=main_category_prompt)
+
+        # Prepare concurrent tasks
+        tasks = [
+            description_chain.arun(content=chunks[0]),
+            audience_chain.arun(content=chunks[0]), # Use first chunk for audience
+            main_category_chain.arun(content=chunks[0]), # Use first chunk for main category
+        ]
+
+        # Add keyword and product extraction tasks for all chunks
+        keyword_tasks = [keywords_chain.arun(content=chunk) for chunk in chunks]
+        product_tasks = [products_chain.ainvoke({"content": chunk}) for chunk in chunks]
+        tasks.extend(keyword_tasks)
+        tasks.extend(product_tasks)
+
+
+        # Run tasks concurrently
+        results = await asyncio.gather(*tasks)
+
+        logger.info("Concurrent LLM tasks completed", url=url, results_type=type(results), results_length=len(results), results_sample=results[:5]) # Log type and length and sample
+
+        # Process results - account for the first 3 results being description, audience, main_category
+        description = results.pop(0).strip()
+        target_audience = results.pop(0).strip()
+        main_category = results.pop(0).strip()
+
+        logger.info("Initial results processed", url=url, description=description, target_audience=target_audience, main_category=main_category)
+
+        # The remaining results are keyword and product results, interleaved (keywords first, then products)
+        keyword_results = results[:len(chunks)]
+        product_results = results[len(chunks):]
+
+        logger.info("Separated keyword and product results", url=url, keyword_results_count=len(keyword_results), product_results_count=len(product_results), keyword_results_type=type(keyword_results), product_results_type=type(product_results))
+
+        # Process keywords
+        keyword_sets = []
+        for chunk_keywords_str in keyword_results:
+             # Add logging for keyword processing input
+             logger.info("Processing keyword result chunk", url=url, chunk_keywords_str_type=type(chunk_keywords_str), chunk_keywords_str_sample=chunk_keywords_str[:100])
+             chunk_keywords = chunk_keywords_str.split(", ")
+             keyword_sets.append(set(kw.strip().lower() for kw in chunk_keywords))
+
+        combined_keywords = set()
+        for kw_set in keyword_sets:
+            combined_keywords.update(kw_set)
+        final_keywords = list(combined_keywords)  # We can take top 10 most frequent if needed
+
+        print(final_keywords)
+
+        # Process products
         all_products = schema_products.copy()
         seen_products = set(p["name"].lower() for p in schema_products)
-        for chunk in chunks:
-            raw_response = await products_chain.ainvoke({"content": chunk})
-            try:
+        for raw_response in product_results:
+             try:
+                # Assuming raw_response is the dictionary returned by ainvoke
+                # Add logging for raw_response before processing
+                logger.info("Processing product result", url=url, raw_response_type=type(raw_response), raw_response_keys=list(raw_response.keys()) if isinstance(raw_response, dict) else None, raw_response_sample=str(raw_response)[:100])
                 json_string = re.sub(r'^```json|```$', '', raw_response['text'].strip()).strip()
                 chunk_products = json.loads(json_string)
                 for product in chunk_products:
                     if product["name"].lower() not in seen_products:
                         all_products.append(product)
                         seen_products.add(product["name"].lower())
-            except (json.JSONDecodeError, KeyError) as e:
+             except (json.JSONDecodeError, KeyError) as e:
                 logger.warning(f"Product parsing failed for chunk: {str(e)}")
+                # Log the raw response that caused the error
+                logger.warning("Failed product raw response", url=url, raw_response=raw_response)
                 continue
             
-        logger.info("Content analyzed with chunking", 
+        logger.info("Content analyzed with chunking and concurrent LLM calls", 
                    url=url, 
                    chunks=len(chunks),
                    audience=target_audience, 
                    keywords=len(final_keywords),
                    products=len(all_products))
-
-        # Get main category
-        main_category_prompt = PromptTemplate(
-            input_variables=["content"],
-            template="""Analyze the following website content and identify the single most relevant main category that describes the website's primary focus or the main product/service it offers. Provide only the category name, e.g., 'E-commerce', 'SaaS', 'Blog', 'Marketing Agency', 'Education Platform', 'Fintech', 'Healthcare', 'Portfolio', 'News', 'Community Forum', 'Consulting Services', 'Software Development', 'Hardware Products'. If unsure, provide a best guess from common website categories. Do not include any other text or explanation.
-            Content: {content}"""
-        )
-        main_category_chain = LLMChain(llm=llm, prompt=main_category_prompt)
-        main_category = (await main_category_chain.arun(content=chunks[0])).strip() # Use the first chunk for main category
 
 
         return (
@@ -181,9 +214,8 @@ async def analyze_content(content: str, url: str, schema_products: List[Dict]) -
             main_category # Added main_category to return value
         )
     except Exception as e:
-        logger.error("Gemini analysis failed", url=url, error=str(e))
+        logger.error("Gemini analysis failed for URL %s with error: %s", url, str(e))
         raise HTTPException(status_code=500, detail=f"Gemini API error: {str(e)}")
-
 def find_product_service_links(soup: BeautifulSoup, base_url: str) -> List[str]:
     keywords = ["products", "services", "offerings", "solutions", "shop"]
     links = []
