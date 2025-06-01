@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, JSON, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, JSON, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import DeclarativeBase, relationship
 from sqlalchemy.sql import func
 
@@ -57,6 +57,8 @@ class ProjectModel(Base):
     owner_id = Column(Integer, ForeignKey("users.id"))
     owner = relationship("UserModel", back_populates="projects")
 
+    agents = relationship("AgentModel", back_populates="project")
+
 class UserModel(Base):
     __tablename__ = "users"
 
@@ -66,3 +68,24 @@ class UserModel(Base):
     hashed_password = Column(String)
 
     projects = relationship("ProjectModel", back_populates="owner")
+
+class AgentModel(Base):
+    __tablename__ = "agents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_name = Column(String, nullable=False)
+    agent_platform = Column(String, nullable=False)  # reddit, twitter, linkedin
+    agent_status = Column(String, default="active")
+    goals = Column(String)
+    instructions = Column(String)
+    expectations = Column(String)
+    project_id = Column(Integer, ForeignKey("projects.id"))
+    mode = Column(String, default="copilot")  # copilot, autonomous
+    review_period = Column(String)  # daily, weekly, monthly
+    review_minutes = Column(Integer, default=0)
+    advanced_settings = Column(JSON, default={})
+    platform_settings = Column(JSON)  # Platform-specific settings
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    project = relationship("ProjectModel", back_populates="agents")
