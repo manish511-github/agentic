@@ -79,7 +79,6 @@ async def analyze_content(content: str, url: str, schema_products: List[Dict]) -
         #Chunking
         chunk_size = 8000
         chunks = [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
-        print(chunks)
 
 
         # Define prompt templates
@@ -91,7 +90,9 @@ async def analyze_content(content: str, url: str, schema_products: List[Dict]) -
         )
         audience_prompt = PromptTemplate(
             input_variables=["content"],
-            template="Analyze this website content chunk and identify the target audience (e.g., startups, marketers, developers) separated by commas. {content}"
+            template="""Analyze this website content and identify AT LEAST 10 distinct target audience segments. Return ONLY a comma-separated list of audience segments without any additional text, explanations, or formatting. Be specific and granular in identifying different audience types. For example: 'startups, marketers, developers, researchers, academics, students, entrepreneurs, small business owners, enterprise clients, freelancers'.
+
+Content: {content}"""
         )
         keywords_prompt = PromptTemplate(
             input_variables=["content"],
@@ -148,7 +149,7 @@ async def analyze_content(content: str, url: str, schema_products: List[Dict]) -
         # Run tasks concurrently
         results = await asyncio.gather(*tasks)
 
-        logger.info("Concurrent LLM tasks completed", url=url, results_type=type(results), results_length=len(results), results_sample=results[:5]) # Log type and length and sample
+        logger.info("Concurrent LLM tasks completed", url=url, results_type=type(results), results_length=len(results)) # Log type and length and sample
 
         # Process results - account for the first 3 results being description, audience, main_category
         description = results.pop(0).strip()
@@ -176,7 +177,6 @@ async def analyze_content(content: str, url: str, schema_products: List[Dict]) -
             combined_keywords.update(kw_set)
         final_keywords = list(combined_keywords)  # We can take top 10 most frequent if needed
 
-        print(final_keywords)
 
         # Process products
         all_products = schema_products.copy()
@@ -267,7 +267,6 @@ def parse_html(soup: BeautifulSoup, url: str, extra_content: str = "") -> Dict:
     content = body.get_text(separator=" ", strip=True)[:10000] if body else ""
     content = f"{content} {extra_content} {' '.join(schema_data)}".strip()
     obj ={"title": title, "description": description, "content": content, "schema_products": schema_products}
-    print(obj)
     logger.info("Successfully parsed HTML", url=url, title=title)
     return {"title": title, "description": description, "content": content, "schema_products": schema_products}
 
