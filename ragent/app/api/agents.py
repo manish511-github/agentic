@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List
+import uuid
 
 from ..database import get_db
 from .. import models, schemas
@@ -12,6 +13,13 @@ router = APIRouter(
     tags=["agents"]
 )
 
+def validate_uuid(uuid_str: str) -> bool:
+    try:
+        uuid.UUID(uuid_str)
+        return True
+    except ValueError:
+        return False
+
 @router.post("/", response_model=schemas.Agent)
 async def create_agent(
     agent: schemas.AgentCreate,
@@ -21,11 +29,11 @@ async def create_agent(
     # Verify project exists and belongs to user
     result = await db.execute(
         select(models.ProjectModel).filter(
-            models.ProjectModel.id == agent.project_id,
+            models.ProjectModel.uuid == str(agent.project_id),
             models.ProjectModel.owner_id == current_user.id
         )
     )
-    project = result.first()
+    project = result.scalars().first()
     
     if not project:
         raise HTTPException(
@@ -33,8 +41,10 @@ async def create_agent(
             detail="Project not found or you don't have access to it"
         )
 
-    # Create new agent
-    db_agent = models.AgentModel(**agent.dict())
+    # Create new agent with actual project ID
+    agent_data = agent.dict()
+    agent_data["project_id"] = project.id
+    db_agent = models.AgentModel(**agent_data)
     db.add(db_agent)
     await db.commit()
     await db.refresh(db_agent)
@@ -55,7 +65,7 @@ async def get_agent(
             models.ProjectModel.owner_id == current_user.id
         )
     )
-    agent = result.first()
+    agent = result.scalars().first()
     
     if not agent:
         raise HTTPException(
@@ -64,20 +74,27 @@ async def get_agent(
         )
     return agent
 
-@router.get("/{project_id}", response_model=List[schemas.Agent])
+@router.get("/project/{project_uuid}", response_model=List[schemas.Agent])
 async def get_project_agents(
-    project_id: int,
+    project_uuid: str,
     db: AsyncSession = Depends(get_db),
     current_user: models.UserModel = Depends(get_current_active_user)
 ):
-    # Verify project ownership
+    # Validate UUID format
+    if not validate_uuid(project_uuid):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid project UUID format"
+        )
+
+    # Verify project ownership using UUID
     result = await db.execute(
         select(models.ProjectModel).filter(
-            models.ProjectModel.id == project_id,
+            models.ProjectModel.uuid == project_uuid,
             models.ProjectModel.owner_id == current_user.id
         )
     )
-    project = result.first()
+    project = result.scalars().first()
     
     if not project:
         raise HTTPException(
@@ -87,9 +104,9 @@ async def get_project_agents(
 
     # Get all agents for the project
     result = await db.execute(
-        select(models.AgentModel).filter(models.AgentModel.project_id == project_id)
+        select(models.AgentModel).filter(models.AgentModel.project_id == project.id)
     )
-    agents = result.all()
+    agents = result.scalars().all()
     return agents
 
 @router.put("/{agent_id}", response_model=schemas.Agent)
@@ -108,7 +125,7 @@ async def update_agent(
             models.ProjectModel.owner_id == current_user.id
         )
     )
-    db_agent = result.first()
+    db_agent = result.scalars().first()
     
     if not db_agent:
         raise HTTPException(
@@ -139,7 +156,7 @@ async def delete_agent(
             models.ProjectModel.owner_id == current_user.id
         )
     )
-    db_agent = result.first()
+    db_agent = result.scalars().first()
     
     if not db_agent:
         raise HTTPException(

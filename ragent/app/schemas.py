@@ -42,6 +42,7 @@ class ProjectCreate(ProjectBase):
 
 class Project(ProjectBase):
     id: int
+    uuid: str
     owner_id: int
     created_at: datetime
 
@@ -92,7 +93,7 @@ class AgentBase(BaseModel):
     platform_settings: PlatformSettings
 
 class AgentCreate(AgentBase):
-    project_id: int
+    project_id: str
 
 class Agent(AgentBase):
     id: int

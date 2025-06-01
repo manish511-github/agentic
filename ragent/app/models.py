@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, Float, JSON, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import DeclarativeBase, relationship
 from sqlalchemy.sql import func
+import uuid
 
 class Base(DeclarativeBase):
     pass
@@ -39,6 +40,7 @@ class ProjectModel(Base):
     __tablename__ = "projects"
 
     id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(String, unique=True, index=True, default=lambda: str(uuid.uuid4()))
     title = Column(String, nullable=False)
     description = Column(String)
     target_audience = Column(String)
