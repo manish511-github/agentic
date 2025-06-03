@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, WebSocket
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -11,11 +11,15 @@ from sqlalchemy import select # Import select
 from . import models, schemas
 from .database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession # Import AsyncSession
+import structlog
+
+# Configure structlog
+logger = structlog.get_logger()
 
 # Security settings
 SECRET_KEY = "your-secret-key"  # Change this in production!
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 300
 
 # Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -111,3 +115,48 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
 @router.get("/users/me/", response_model=schemas.User)
 async def read_users_me(current_user: models.UserModel = Depends(get_current_active_user)):
     return current_user
+
+async def get_current_user_ws(
+    websocket: WebSocket,
+    db: AsyncSession = Depends(get_db)
+) -> Optional[models.UserModel]:
+    """Get current user from WebSocket connection"""
+    try:
+        # Get token from query parameters
+        token = websocket.query_params.get("token")
+        if not token:
+            logger.error("WebSocket connection rejected: No token provided")
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return None
+        
+        # Decode token
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            username: str = payload.get("sub")
+            if username is None:
+                logger.error("WebSocket connection rejected: Invalid token payload")
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return None
+        except JWTError as e:
+            logger.error("WebSocket connection rejected: Invalid token", error=str(e))
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return None
+        
+        # Get user from database
+        result = await db.execute(
+            select(models.UserModel).filter(models.UserModel.username == username)
+        )
+        user = result.scalars().first()
+        
+        if user is None:
+            logger.error("WebSocket connection rejected: User not found")
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return None
+        
+        logger.info("WebSocket authentication successful", username=username)
+        return user
+        
+    except Exception as e:
+        logger.error("WebSocket authentication error", error=str(e))
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return None

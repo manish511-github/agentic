@@ -8,11 +8,13 @@ from app.agent import router as agent_router
 from app.rdagent import router as rdagent_router
 from app.auth import router as auth_router 
 from app.api.projects import router as projects_router 
-from app.api.agents import router as agents_router  # Import the agents router
+from app.api.agents import router as agents_router
+from app.api.websocket import router as websocket_router
 from app.database import init_db
+from fastapi.middleware.cors import CORSMiddleware
+from app.tasks.background_tasks import task_manager
 
 import math
-from fastapi.middleware.cors import CORSMiddleware # Import CORSMiddleware
 
 # Initialize logging
 structlog.configure(
@@ -48,13 +50,19 @@ async def startup_event():
     await init_db()
     logger.info("Rate limiter and database initialized")
 
-# Mount router
+# Mount routers
 app.include_router(agent_router)
 app.include_router(rdagent_router)
-app.include_router(auth_router, prefix="/auth", tags=["auth"]) # Include the auth router
-app.include_router(projects_router) 
-app.include_router(agents_router)  # Include the agents router
+app.include_router(auth_router, prefix="/auth", tags=["auth"])
+app.include_router(projects_router)
+app.include_router(agents_router)
+app.include_router(websocket_router)  # Add WebSocket router
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    # Stop all running tasks
+    for agent_id in list(task_manager.running_tasks.keys()):
+        await task_manager.stop_agent_task(agent_id)
 
 # if __name__ == "__main__":
 #     import uvicorn
