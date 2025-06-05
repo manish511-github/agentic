@@ -26,3 +26,10 @@ python-multipart
 python-jose[cryptography]==3.3.0  # for JWT support
 passlib[bcrypt]==1.7.4      
 psycopg2-binary==2.9.9 
+
+# Celery and its dependencies
+celery==5.3.6
+flower==2.0.1  # Optional: for monitoring Celery tasks 
+
+# Pydantic settings
+pydantic-settings==2.2.1 

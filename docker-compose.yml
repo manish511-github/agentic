@@ -28,6 +28,72 @@ services:
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app"
 
+  celery_worker:
+    build:
+      context: ./ragent
+      dockerfile: Dockerfile
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - POSTGRES_DSN=${POSTGRES_DSN}
+      - REDIS_URL=${REDIS_URL}
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+      - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
+      - REDDIT_USERNAME=${REDDIT_USERNAME}
+      - REDDIT_PASSWORD=${REDDIT_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - market-network
+    restart: unless-stopped
+    volumes:
+      - ./ragent:/app
+    command: celery -A app.celery_app worker --loglevel=info
+
+  celery_beat:
+    build:
+      context: ./ragent
+      dockerfile: Dockerfile
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - POSTGRES_DSN=${POSTGRES_DSN}
+      - REDIS_URL=${REDIS_URL}
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+      - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
+      - REDDIT_USERNAME=${REDDIT_USERNAME}
+      - REDDIT_PASSWORD=${REDDIT_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - market-network
+    restart: unless-stopped
+    volumes:
+      - ./ragent:/app
+    command: celery -A app.celery_app beat --loglevel=info
+
+  flower:
+    build:
+      context: ./ragent
+      dockerfile: Dockerfile
+    ports:
+      - "5555:5555"
+    environment:
+      - REDIS_URL=${REDIS_URL}
+    depends_on:
+      - redis
+      - celery_worker
+    networks:
+      - market-network
+    restart: unless-stopped
+    command: celery -A app.celery_app flower --port=5555
+
   postgres:
     image: postgres:15
     environment:

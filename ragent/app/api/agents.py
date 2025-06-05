@@ -1,12 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List
 import uuid
+from datetime import datetime
 
 from ..database import get_db
 from .. import models, schemas
 from ..auth import get_current_active_user
+from app.websocket import manager
+from app.tasks import run_agent  # Import the Celery task
 
 router = APIRouter(
     prefix="/agents",
@@ -48,6 +51,32 @@ async def create_agent(
     db.add(db_agent)
     await db.commit()
     await db.refresh(db_agent)
+
+    # Trigger Celery task for the new agent
+    try:
+        # Schedule the task to run
+        run_agent.delay(db_agent.id)
+        
+        # Update agent status to indicate task is scheduled
+        db_agent.agent_status = "scheduled"
+        db_agent.last_run = datetime.utcnow()
+        await db.commit()
+        await db.refresh(db_agent)
+        
+        # Send WebSocket notification
+        await manager.broadcast_to_project(
+            project.id,
+            {
+                "type": "agent_created",
+                "agent_id": db_agent.id,
+                "status": "scheduled",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+    except Exception as e:
+        # Log the error but don't fail the agent creation
+        print(f"Error scheduling agent task: {str(e)}")
+    
     return db_agent
 
 @router.get("/{agent_id}", response_model=schemas.Agent)
@@ -166,4 +195,46 @@ async def delete_agent(
 
     await db.delete(db_agent)
     await db.commit()
-    return None 
+    return None
+
+@router.websocket("/ws/{project_id}")
+async def websocket_endpoint(websocket: WebSocket, project_id: int):
+    await manager.connect(websocket, project_id)
+    try:
+        while True:
+            # Keep connection alive
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, project_id)
+
+@router.get("/{agent_id}/results", response_model=List[schemas.AgentResult])
+async def get_agent_results(
+    agent_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.UserModel = Depends(get_current_active_user)
+):
+    # Get agent and verify project ownership
+    result = await db.execute(
+        select(models.AgentModel)
+        .join(models.ProjectModel)
+        .filter(
+            models.AgentModel.id == agent_id,
+            models.ProjectModel.owner_id == current_user.id
+        )
+    )
+    agent = result.scalars().first()
+    
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent not found or you don't have access to it"
+        )
+
+    # Get results
+    result = await db.execute(
+        select(models.AgentResultModel)
+        .filter(models.AgentResultModel.agent_id == agent_id)
+        .order_by(models.AgentResultModel.created_at.desc())
+    )
+    results = result.scalars().all()
+    return results 

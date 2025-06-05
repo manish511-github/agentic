@@ -102,3 +102,14 @@ class Agent(AgentBase):
 
     class Config:
         orm_mode = True
+
+class AgentResult(BaseModel):
+    id: int
+    agent_id: int
+    status: str
+    result_data: Optional[Dict] = None
+    error: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
