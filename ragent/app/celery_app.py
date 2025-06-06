@@ -18,6 +18,12 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    broker_connection_retry_on_startup=True,
+    task_track_started=True,
+    task_time_limit=3600,  # 1 hour
+    worker_prefetch_multiplier=1,  # Disable prefetching
+    worker_max_tasks_per_child=100,  # Restart worker after 100 tasks
+    worker_max_memory_per_child=200000  # Restart worker after using 200MB memory
 )
 
 # Optional: Configure periodic tasks

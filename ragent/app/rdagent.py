@@ -32,6 +32,7 @@ import asyncio
 from app.models import WebsiteDataModel, RedditPostModel, AgentModel, AgentResultModel
 from app.database import get_db
 from functools import lru_cache
+from sqlalchemy.orm import Session
 
 # Initialize logging
 import logging
@@ -63,7 +64,6 @@ structlog.configure(
 # Initialize logger
 logger = structlog.get_logger()
 
-
 # Load environment variables
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -91,6 +91,7 @@ class AgentState(TypedDict):
     posts: List[Dict]
     retries: int
     error: Optional[str]
+    db: Session
 
 class RedditAgentInput(BaseModel):
     agent_name: str
@@ -104,747 +105,168 @@ class RedditAgentInput(BaseModel):
     max_age_days: int = 7
     restrict_to_goal_subreddits: bool = False
 
-class RedditAgent:
-    def __init__(self, agent: AgentModel, db: AsyncSession):
+async def get_reddit_client():
+    """Get Reddit client"""
+    reddit = asyncpraw.Reddit(
+        client_id=REDDIT_CLIENT_ID,
+        client_secret=REDDIT_CLIENT_SECRET,
+        user_agent=REDDIT_USER_AGENT,
+        username=REDDIT_USERNAME,
+        password=REDDIT_PASSWORD
+    )
+    return reddit
 
-        self.agent = agent
-        self.db = db
-        self.state = {
-            "agent_name": agent.agent_name,
-            "goals": agent.goals.split(",") if isinstance(agent.goals, str) else agent.goals,
-            "instructions": agent.instructions,
-            "description": agent.advanced_settings.get("description", ""),
-            "expectation": agent.advanced_settings.get("expectation", ""),
-            "target_audience": agent.advanced_settings.get("target_audience", ""),
-            "company_keywords": agent.advanced_settings.get("company_keywords", []),
-            "min_upvotes": agent.advanced_settings.get("min_upvotes", 0),
-            "max_age_days": agent.advanced_settings.get("max_age_days", 7),
-            "restrict_to_goal_subreddits": agent.advanced_settings.get("restrict_to_goal_subreddits", False),
-            "subreddits": [],
-            "posts": [],
-            "retries": 0,
-            "error": None
-        }
-
-    async def run(self):
-        """Run the Reddit agent workflow"""
-        try:
-            # Execute the workflow
-            result = await reddit_graph.ainvoke(self.state)
-            
-            if result.get("error"):
-                raise Exception(result["error"])
-            
-            return {
-                "status": "completed",
-                "subreddits": result["subreddits"],
-                "posts": result["posts"]
-            }
-            
-        except Exception as e:
-            logger.error("Reddit agent execution failed", error=str(e))
-            return {
-                "status": "error",
-                "error": str(e)
-            }
-
-    async def validate_input_node(self, state: AgentState) -> AgentState:
-        valid_goals = ["increase brand awareness", "engage potential customers", "grow web traffic"]
-        if not all(goal.lower() in valid_goals for goal in state["goals"]):
-            state["error"] = f"Invalid goals. Choose from: {valid_goals}"
-            return state
-        state["retries"] = 0
-        state["subreddits"] = []
-        state["posts"] = []
-        logger.info("Input validated", agent_name=state["agent_name"])
+def validate_input_node(state: AgentState) -> AgentState:
+    """Validate input parameters"""
+    valid_goals = ["increase brand awareness", "engage potential customers", "grow web traffic"]
+    if not all(goal.lower() in valid_goals for goal in state["goals"]):
+        state["error"] = f"Invalid goals. Choose from: {valid_goals}"
         return state
-
-    async def search_subreddits_node(self, state: AgentState) -> AgentState:
-        if state.get("error"):
-            return state
-        
-        try:
-            async with await self.get_reddit_client() as reddit:
-                # Configuration
-                MAX_SUBREDDITS_TO_CONSIDER = 50
-                FINAL_SUBREDDIT_LIMIT = 5
-                REDDIT_BATCH_SIZE = 10
-                LLM_BATCH_SIZE = 10  # Smaller batches for LLM processing
-                LLM_RATE_LIMIT_DELAY = 1  # Seconds between LLM calls
-                
-                goal_subreddits = {
-                    "increase brand awareness": ["marketing", "Branding", "Advertising"],
-                    "engage potential customers": ["AskReddit", "smallbusiness", "Entrepreneur"],
-                    "grow web traffic": ["SEO", "DigitalMarketing", "growthhacking"]
-                }
-                
-                # Use input keywords
-                keywords = state["company_keywords"][:8]
-                if state["retries"] > 0:
-                    keywords = [f"{kw} {state['retries']}" for kw in keywords]
-                logger.info("Using keywords", agent_name=state["agent_name"], keywords=keywords)
-
-                # Generate cache key
-                query = f"{state['expectation']} Description: {state['description']} Target audience: {state['target_audience']}"
-                cache_key = f"subreddits_data:{hashlib.sha256((query + ','.join(keywords)).encode()).hexdigest()}"
-                
-                # Try to get cached results
-                cached_subreddits = None
-                subreddit_data = []
-                
-                if cached_subreddits:
-                    logger.info("Cache hit for subreddit data", agent_name=state["agent_name"])
-                    subreddit_data = json.loads(cached_subreddits)
-                else:
-                    # Phase 1: Subreddit Discovery
-                    target_subreddits = set()
-                    
-                    if state["restrict_to_goal_subreddits"]:
-                        for goal in state["goals"]:
-                            target_subreddits.update(goal_subreddits.get(goal.lower(), []))
-                    else:
-                        async def search_keyword(kw):
-                            result = set()
-                            try:
-                                subreddits = reddit.subreddits.search(kw, limit=10)
-                                async for subreddit in subreddits:
-                                    result.add(subreddit.display_name)
-                            except Exception as e:
-                                logger.warning("Keyword search failed", keyword=kw, error=str(e))
-                            return result
-                        
-                        # Process in batches with rate limiting
-                        for i in range(0, len(keywords), REDDIT_BATCH_SIZE):
-                            batch = keywords[i:i+REDDIT_BATCH_SIZE]
-                            results = await asyncio.gather(*(search_keyword(kw) for kw in batch))
-                            for res in results:
-                                target_subreddits.update(res)
-                            if len(target_subreddits) >= MAX_SUBREDDITS_TO_CONSIDER:
-                                break
-                            await asyncio.sleep(0.5)  # Reddit API rate limiting
-                    
-                    logger.info("Initial subreddit candidates", 
-                              agent_name=state["agent_name"], 
-                              subreddit_data=target_subreddits)
-
-                    # Phase 2: Subreddit Data Collection
-                    if target_subreddits:
-                        async def fetch_subreddit_data(name):
-                            try:
-                                subreddit = await reddit.subreddit(name)
-                                await subreddit.load()
-                                description = subreddit.public_description or subreddit.title or ""
-                                subscribers = getattr(subreddit, 'subscribers', 0)
-                                return {
-                                    "name": name,
-                                    "description": description,
-                                    "subscribers": subscribers,
-                                    "active": (subscribers > 1000)  # Basic activity indicator
-                                } if description else None
-                            except Exception as e:
-                                logger.warning("Subreddit fetch failed", subreddit=name, error=str(e))
-                                return None
-
-                        all_subreddits = list(target_subreddits)[:MAX_SUBREDDITS_TO_CONSIDER]
-                        subreddit_data = []
-                        
-                        for i in range(0, len(all_subreddits), REDDIT_BATCH_SIZE):
-                            batch = all_subreddits[i:i+REDDIT_BATCH_SIZE]
-                            tasks = [fetch_subreddit_data(name) for name in batch]
-                            results = await asyncio.gather(*tasks, return_exceptions=True)
-                            
-                            subreddit_data.extend([
-                                r for r in results 
-                                if r and not isinstance(r, Exception)
-                            ])
-                            
-                            if i + REDDIT_BATCH_SIZE < len(all_subreddits):
-                                await asyncio.sleep(1)  # Reddit API rate limiting
-                    
-                        logger.info("Subreddit data collected", 
-                                  agent_name=state["agent_name"], 
-                                  count=len(subreddit_data), subreddit_data =subreddit_data)
-                        
-                        # Cache the results
-                        # await redis_client.setex(cache_key, 3600, json.dumps(subreddit_data))
-
-                # Fallback if no data found
-                if not subreddit_data:
-                    logger.warning("No subreddit data found, using fallback", agent_name=state["agent_name"])
-                    for goal in state["goals"]:
-                        target_subreddits.update(goal_subreddits.get(goal.lower(), []))
-                    state["subreddits"] = list(target_subreddits)[:FINAL_SUBREDDIT_LIMIT]
-                    return state
-
-                # Phase 3: Initial Filtering
-                def calculate_score(data):
-                    score = 0
-                    text = (data["name"] + " " + data["description"]).lower()
-                    for kw in keywords:
-                        if kw.lower() in text:
-                            score += 1
-                    subscriber_factor = math.log10(data.get("subscribers", 1) + 1)
-                    return (score / max(1, len(keywords))) * subscriber_factor
-
-                scored_subreddits = sorted(
-                    [{"data": d, "score": calculate_score(d)} for d in subreddit_data],
-                    key=lambda x: x["score"],
-                    reverse=True
-                )
-                
-                # Take top candidates for LLM processing
-                top_candidates = [item["data"] for item in scored_subreddits[:20]]
-                
-                # Phase 4: Chunked LLM Processing
-                llm = ChatGoogleGenerativeAI(
-                    model="gemini-1.5-flash",
-                    google_api_key=GOOGLE_API_KEY,
-                    max_retries=2,
-                    timeout=30
-                )
-                
-                prompt = PromptTemplate(
-                    input_variables=["subreddits", "expectation", "description", "target_audience", "limit"],
-                    template=(
-                        "Evaluate these subreddits for relevance to our marketing needs. "
-                        "Follow these instructions carefully:\n\n"
-                        "PRODUCT DETAILS:\n"
-                        "- Goals: {expectation}\n"
-                        "- Description: {description}\n"
-                        "- Target Audience: {target_audience}\n\n"
-                        "SUBREDDITS TO EVALUATE:\n"
-                        "{subreddits}\n\n"
-                        "INSTRUCTIONS:\n"
-                        "1. Select exactly {limit} most relevant subreddits\n"
-                        "2. Consider relevance, activity level, and audience match\n"
-                        "3. Return ONLY a valid JSON array formatted exactly like this example:\n"
-                        "   [\"subreddit1\", \"subreddit2\", \"subreddit3\"]\n"
-                        "4. DO NOT include any backticks, markdown formatting, or extra explanation\n"
-                        "5. DO NOT wrap the output in a code block\n"
-                        "6. Ensure all subreddit names are from the provided list and spelled exactly\n\n"
-                        "OUTPUT REQUIREMENTS:\n"
-                        "- Must be a valid JSON array of strings\n"
-                        "- Must contain exactly {limit} items\n"
-                        "- Must use double quotes for each string\n"
-                        "- Must NOT include backticks, markdown, or any extra text\n\n"
-                        "IMPORTANT:\n"
-                        "- NO markdown formatting (no ```json ... ```)\n"
-                        "- NO text before or after the JSON array\n\n"
-                        "YOUR RESPONSE:"
-                    )
-                )
-                
-                final_subreddits = []
-                
-                # Process candidates in smaller batches for LLM
-                for i in range(0, len(top_candidates), LLM_BATCH_SIZE):
-                    batch = top_candidates[i:i+LLM_BATCH_SIZE]
-                    
-                    # Create a unique cache key for this batch
-                    batch_cache_key = f"subreddits_llm:{hashlib.sha256((query + ','.join([d['name'] for d in batch])).encode()).hexdigest()}"
-                    # cached_batch = await redis_client.get(batch_cache_key)
-                    cached_batch = None
-                    
-                    if cached_batch:
-                        logger.info("LLM batch cache hit", agent_name=state["agent_name"])
-                        batch_results = json.loads(cached_batch)
-                    else:
-                        try:
-                            chain = LLMChain(llm=llm, prompt=prompt)
-                            subreddits_input = "\n".join(
-                                f"{d['name']} (Subscribers: {d.get('subscribers', 'N/A')}): {d['description']}"
-                                for d in batch
-                            )
-                            
-                            result = await chain.arun(
-                                subreddits=subreddits_input,
-                                expectation=state["expectation"],
-                                description=state["description"],
-                                target_audience=state["target_audience"],
-                                limit=min(LLM_BATCH_SIZE, FINAL_SUBREDDIT_LIMIT - len(final_subreddits))
-                            )
-                            batch_results = json.loads(result)
-                            logger.info(batch_results)
-                            # await redis_client.setex(batch_cache_key, 3600, json.dumps(batch_results))
-                        except json.JSONDecodeError as e:
-                            logger.warning("LLM batch failed - JSON decode error", error=str(e))
-                            # Fallback to score-based selection
-                            batch_results = [d["name"] for d in batch[:FINAL_SUBREDDIT_LIMIT - len(final_subreddits)]]
-                        except Exception as e:
-                            logger.warning("LLM batch failed", error=str(e))
-                            batch_results = []
-                            # Implement exponential backoff if needed
-                            await asyncio.sleep(LLM_RATE_LIMIT_DELAY * 2)
-                        
-                        # Small delay between LLM calls to avoid rate limits
-                        await asyncio.sleep(LLM_RATE_LIMIT_DELAY)
-                    
-                    # Validate batch results against our candidates
-                    valid_results = [
-                        name for name in batch_results 
-                        if name in [d["name"] for d in batch]
-                    ]
-                    final_subreddits.extend(valid_results)
-                    
-                    # Early exit if we have enough
-                    if len(final_subreddits) >= FINAL_SUBREDDIT_LIMIT:
-                        break
-                
-                # Final fallback if LLM processing didn't yield enough results
-                if len(final_subreddits) < FINAL_SUBREDDIT_LIMIT:
-                    remaining = FINAL_SUBREDDIT_LIMIT - len(final_subreddits)
-                    fallback = [d["name"] for d in top_candidates if d["name"] not in final_subreddits][:remaining]
-                    final_subreddits.extend(fallback)
-                
-                state["subreddits"] = final_subreddits[:FINAL_SUBREDDIT_LIMIT]
-                logger.info("Final subreddits selected", 
-                          agent_name=state["agent_name"], 
-                          subreddits=state["subreddits"])
-
-        except Exception as e:
-            state["error"] = f"Subreddit search failed: {str(e)}"
-            logger.error("Subreddit search failed", agent_name=state["agent_name"], error=str(e))
-        
-        return state
-
-    async def fetch_posts_node(self, state: AgentState) -> AgentState:
-        if state.get("error"):
-            return state
-
-        try:
-            async with await self.get_reddit_client() as reddit:
-                # Configuration
-                POSTS_PER_SUBREDDIT = 10
-                MAX_POSTS = 50
-                MIN_RELEVANCE_SCORE = 0.5
-                
-                all_posts = []
-                
-                # Process each subreddit
-                for subreddit_name in state["subreddits"]:
-                    try:
-                        subreddit = await reddit.subreddit(subreddit_name)
-                        
-                        # Get posts from subreddit
-                        async for submission in subreddit.hot(limit=POSTS_PER_SUBREDDIT):
-                            # Skip if post is too old
-                            post_age = datetime.utcnow() - datetime.fromtimestamp(submission.created_utc)
-                            if post_age.days > state["max_age_days"]:
-                                continue
-                                
-                            # Skip if post doesn't have enough upvotes
-                            if submission.score < state["min_upvotes"]:
-                                continue
-                                
-                            # Calculate relevance score
-                            relevance_score = self.calculate_post_relevance(
-                                submission.title + " " + submission.selftext,
-                                state["company_keywords"],
-                                state["expectation"]
-                            )
-                            
-                            if relevance_score >= MIN_RELEVANCE_SCORE:
-                                post = {
-                                    "subreddit": subreddit_name,
-                                    "post_id": submission.id,
-                                    "post_title": submission.title,
-                                    "post_body": submission.selftext,
-                                    "post_url": f"https://reddit.com{submission.permalink}",
-                                    "relevance_score": relevance_score
-                                }
-                                all_posts.append(post)
-                                
-                                if len(all_posts) >= MAX_POSTS:
-                                    break
-                                    
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to fetch posts from subreddit",
-                            subreddit=subreddit_name,
-                            error=str(e)
-                        )
-                        continue
-                        
-                    if len(all_posts) >= MAX_POSTS:
-                        break
-                        
-                # Sort posts by relevance score
-                all_posts.sort(key=lambda x: x["relevance_score"], reverse=True)
-                
-                # Take top posts
-                state["posts"] = all_posts[:MAX_POSTS]
-                
-                logger.info(
-                    "Fetched posts",
-                    agent_name=state["agent_name"],
-                    post_count=len(state["posts"])
-                )
-                
-        except Exception as e:
-            state["error"] = f"Post fetching failed: {str(e)}"
-            logger.error("Fetch failure", error=str(e), agent_name=state["agent_name"])
-        
-        return state
-        
-    def calculate_post_relevance(self, text: str, keywords: List[str], expectation: str) -> float:
-        """Calculate relevance score for a post"""
-        try:
-            # Initialize LLM
-            llm = ChatGoogleGenerativeAI(
-                model="gemini-1.5-flash",
-                google_api_key=GOOGLE_API_KEY,
-                max_retries=2,
-                timeout=30
-            )
-            
-            # Create prompt
-            prompt = PromptTemplate(
-                input_variables=["text", "keywords", "expectation"],
-                template=(
-                    "Evaluate the relevance of this text to our marketing needs.\n\n"
-                    "TEXT:\n{text}\n\n"
-                    "KEYWORDS:\n{keywords}\n\n"
-                    "EXPECTATION:\n{expectation}\n\n"
-                    "Rate the relevance from 0.0 to 1.0, where:\n"
-                    "- 0.0 means completely irrelevant\n"
-                    "- 1.0 means perfectly relevant\n\n"
-                    "Return ONLY the number, no explanation or formatting.\n"
-                    "Example: 0.85"
-                )
-            )
-            
-            # Create chain
-            chain = LLMChain(llm=llm, prompt=prompt)
-            
-            # Run chain
-            result = chain.run(
-                text=text,
-                keywords=", ".join(keywords),
-                expectation=expectation
-            )
-            
-            # Parse result
-            try:
-                score = float(result.strip())
-                return min(max(score, 0.0), 1.0)  # Clamp between 0 and 1
-            except ValueError:
-                logger.warning("Failed to parse relevance score", result=result)
-                return 0.0
-                
-        except Exception as e:
-            logger.warning("Relevance calculation failed", error=str(e))
-            return 0.0
-
-    async def store_results_node(self, state: AgentState) -> AgentState:
-        if state.get("error"):
-            return state
-            
-        try:
-            # Store results in database
-            for post in state["posts"]:
-                reddit_post = RedditPostModel(
-                    agent_name=state["agent_name"],
-                    goals=",".join(state["goals"]),
-                    instructions=state["instructions"],
-                    subreddit=post["subreddit"],
-                    post_id=post["post_id"],
-                    post_title=post["post_title"],
-                    post_body=post["post_body"],
-                    post_url=post["post_url"],
-                    relevance_score=post["relevance_score"],
-                    created_at=datetime.utcnow()
-                )
-                
-                # Add to database session
-                self.db.add(reddit_post)
-            
-            # Commit changes
-            await self.db.commit()
-            
-            logger.info(
-                "Stored Reddit posts",
-                agent_name=state["agent_name"],
-                post_count=len(state["posts"])
-            )
-            
-        except Exception as e:
-            state["error"] = f"Database error: {str(e)}"
-            logger.error("Database error", agent_name=state["agent_name"], error=str(e))
-            
-        return state
-
-    @staticmethod
-    async def get_reddit_client():
-        reddit = asyncpraw.Reddit(
-            client_id=REDDIT_CLIENT_ID,
-            client_secret=REDDIT_CLIENT_SECRET,
-            user_agent=REDDIT_USER_AGENT,
-            username=REDDIT_USERNAME,
-            password=REDDIT_PASSWORD
-        )
-        return reddit
-
-REDDIT_RATE_LIMIT = 60  # Reddit API calls per minute
-GEMINI_RATE_LIMIT = 15  # Gemini free tier limit per minute
-MAX_POSTS_PER_SUBREDDIT = 5
-BATCH_SIZE = 5
-DELAY_BETWEEN_BATCHES = 3
-
-
-async def safe_gemini_call(llm: ChatGoogleGenerativeAI, prompt: str) -> str:
-    """Make rate-limited Gemini API call."""
-    try:
-        response = await llm.ainvoke(prompt)
-        return response.content.lower()
-    except Exception as e:
-        logger.warning(f"Gemini call failed: {str(e)}")
-        raise
-
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-async def fetch_posts_node(state: AgentState) -> AgentState:
-    if state.get("error"):
-        return state
-
-    start_time = datetime.utcnow()
+    state["retries"] = 0
+    state["subreddits"] = []
     state["posts"] = []
-
-    try:
-        # Validate goals
-        valid_goals = ["increase brand awareness", "engage potential customers", "grow web traffic"]
-        if not all(g in valid_goals for g in state["goals"]):
-            state["error"] = f"Invalid goals: {[g for g in state['goals'] if g not in valid_goals]}"
-            logger.error("Invalid goals", agent_name=state["agent_name"], invalid_goals=[g for g in state["goals"] if g not in valid_goals])
-            return state
-
-        # Initialize LLM with error handling
-        if not os.getenv("GOOGLE_API_KEY"):
-            raise ValueError("GOOGLE_API_KEY environment variable not set")
-        
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
-            google_api_key=os.getenv("GOOGLE_API_KEY"),
-            max_retries=1,
-            temperature=0.2
-        )
-
-        async with await get_reddit_client() as reddit:
-            cutoff_time = datetime.utcnow() - timedelta(days=state["max_age_days"])
-            BATCH_SIZE = 3  # Process 3 subreddits at a time
-            MAX_POSTS_PER_SUBREDDIT = 5  # Focus on quality
-            DELAY_BETWEEN_BATCHES = 1.0
-
-            async def process_subreddit(subreddit_name: str) -> List[Dict]:
-                """Process subreddit with LLM-based relevance scoring."""
-                posts = []
-                try:
-                    subreddit = await reddit.subreddit(subreddit_name)
-                    listings = [
-                        ('hot', subreddit.hot(limit=25)),
-                        ('new', subreddit.new(limit=25)),
-                        ('top', subreddit.top('week', limit=25))
-                    ]
-                    print(listings)
-                    # Collect candidate posts
-                    candidates = []
-                    for sort_method, listing in listings:
-                        async for submission in listing:
-                            candidates.append({
-                                "submission": submission,
-                                "sort_method": sort_method,
-                                "title": submission.title,
-                                "selftext": submission.selftext
-                            })
-                    print(listings)
-                    if not candidates:
-                        return posts
-
-                    # Cache key for LLM results
-                    cache_key = f"posts:{subreddit_name}:{hashlib.sha256((state['expectation'] + ','.join(state['goals']) + state['description'] + ','.join([c['title'] + c['selftext'] for c in candidates])).encode()).hexdigest()}"
-                    # cached_posts = await redis_client.get(cache_key)
-                    cached_posts =None
-                    if cached_posts:
-                        logger.info("Cache hit for posts", subreddit=subreddit_name)
-                        posts = json.loads(cached_posts)
-                    else:
-                        # LLM prompt for batch scoring
-                        prompt = (
-                            f"Score the relevance (0-1, float) of each post for a product with the following details:\n"
-                            f"Product Description: {state['description']}\n"
-                            f"Goals: {', '.join(state['goals'])} (ensure posts support these marketing objectives)\n"
-                            f"Expectation: {state['expectation']} (posts should match this content focus)\n"
-                            f"Target Audience: {state['target_audience']}\n"
-                            f"Keywords: {', '.join(state['company_keywords'])}\n\n"
-                            "Posts:\n" +
-                            "\n".join([
-                                f"Post {i}: {c['title']}\n{c['selftext'][:500]}"
-                                for i, c in enumerate(candidates, 1)
-                            ]) +
-                            f"\n\nReturn ONLY a JSON-formatted list of relevance scores (0-1 floats), "
-                            f"one for each post listed above. You must return exactly {len(candidates)} scores in the same order as the posts. "
-                            "Do not include any explanations, extra text, or Markdown. Just return the list.\n"
-                            "Example:\n[0.7, 0.3, 0.9, 0.5]"
-                        )
-
-                        try:
-                            response = await safe_gemini_call(llm, prompt)
-                            cleaned_response = re.sub(r'^```json\n|\n```$', '', response.strip())
-                            scores = json.loads(cleaned_response)
-
-                            # if len(scores) != len(candidates):
-                            #     logger.info(f"Score length: {len(scores)}, Candidate length: {len(candidates)}")
-                            #     raise ValueError("Mismatch in scores length")
-                            
-                            # Filter posts with score >= 0.75
-                            for candidate, score in zip(candidates, scores):
-                                if isinstance(score, (int, float)) and score >= 0.3:
-                                    submission = candidate["submission"]
-                                    posts.append({
-                                        "subreddit": subreddit_name,
-                                        "post_id": submission.id,
-                                        "post_title": submission.title,
-                                        "post_body": submission.selftext,
-                                        "post_url": f"https://www.reddit.com{submission.permalink}",
-                                        "relevance_score": score,
-                                        "comment_count": submission.num_comments,
-                                        "upvote_comment_ratio": submission.score / max(1, submission.num_comments),
-                                        "upvotes": submission.score,
-                                        "created": datetime.utcfromtimestamp(submission.created_utc).isoformat(),
-                                        "sort_method": candidate["sort_method"]
-                                    })
-                                    
-
-                        except Exception as e:
-                            logger.warning(f"LLM scoring failed for {subreddit_name}: {str(e)}")
-                            # Fallback: Keyword matching
-                            for candidate in candidates:
-                                content = (candidate["title"] + " " + candidate["selftext"]).lower()
-                                score = sum(1 for kw in state["company_keywords"] if kw.lower() in content) / max(1, len(state["company_keywords"]))
-                                if score >= 0.75:
-                                    submission = candidate["submission"]
-                                    posts.append({
-                                        "subreddit": subreddit_name,
-                                        "post_id": submission.id,
-                                        "post_title": submission.title,
-                                        "post_body": submission.selftext,
-                                        "post_url": f"https://www.reddit.com{submission.permalink}",
-                                        "relevance_score": score,
-                                        "hybrid_score": score,
-                                        "comment_count": submission.num_comments,
-                                        "upvote_comment_ratio": submission.score / max(1, submission.num_comments),
-                                        "upvotes": submission.score,
-                                        "created": datetime.utcfromtimestamp(submission.created_utc).isoformat(),
-                                        "sort_method": candidate["sort_method"]
-                                    })
-
-                        # Limit to MAX_POSTS_PER_SUBREDDIT
-                        # posts = sorted(posts, key=lambda x: x["relevance_score"], reverse=True)[:MAX_POSTS_PER_SUBREDDIT]
-                        # await redis_client.setex(cache_key, 3600, json.dumps(posts))
-
-                    return posts
-
-                except Exception as e:
-                    logger.warning(f"Error processing {subreddit_name}: {str(e)}")
-                    return posts
-
-            # Process subreddits in batches
-            for i in range(0, len(state["subreddits"]), BATCH_SIZE):
-                batch = state["subreddits"][i:i + BATCH_SIZE]
-                results = await asyncio.gather(
-                    *(process_subreddit(name) for name in batch),
-                    return_exceptions=True
-                )
-
-                for result in results:
-                    if isinstance(result, list):
-                        state["posts"].extend(result)
-                    elif isinstance(result, Exception):
-                        logger.error(f"Batch processing error: {str(result)}")
-
-                if i + BATCH_SIZE < len(state["subreddits"]):
-                    await asyncio.sleep(DELAY_BETWEEN_BATCHES)
-
-            # Sort and limit final results
-            state["posts"] = sorted(
-                state["posts"],
-                key=lambda x: (x["relevance_score"], x["upvotes"], x["created"]),
-                reverse=True
-            )
-            logger.info(
-                "Posts fetched successfully",
-                agent_name=state["agent_name"],
-                post_count=len(state["posts"]),
-                posts=state["posts"],
-                duration_sec=(datetime.utcnow() - start_time).total_seconds()
-            )
-
-    except Exception as e:
-        state["error"] = f"Post fetching failed: {str(e)}"
-        logger.error(
-            "Fetch failure",
-            error=str(e),
-            stack_info=True,
-            agent_name=state.get("agent_name", "unknown")
-        )
-
+    logger.info("Input validated", agent_name=state["agent_name"])
     return state
 
-async def store_results_node(state: AgentState) -> AgentState:
+def search_subreddits_node(state: AgentState) -> AgentState:
+    """Search for relevant subreddits synchronously"""
     if state.get("error"):
         return state
-    import rpdb;
-    rpdb.set_trace()
+    
+    try:
+        # For now, just use predefined subreddits
+        goal_subreddits = {
+            "increase brand awareness": ["marketing", "Branding", "Advertising"],
+            "engage potential customers": ["AskReddit", "smallbusiness", "Entrepreneur"],
+            "grow web traffic": ["SEO", "DigitalMarketing", "growthhacking"]
+        }
+        
+        target_subreddits = set()
+        if state["restrict_to_goal_subreddits"]:
+            for goal in state["goals"]:
+                target_subreddits.update(goal_subreddits.get(goal.lower(), []))
+        
+        state["subreddits"] = list(target_subreddits)[:5]  # Limit to 5 subreddits
+        logger.info("Subreddits selected", agent_name=state["agent_name"], subreddits=state["subreddits"])
+        
+    except Exception as e:
+        state["error"] = f"Subreddit search failed: {str(e)}"
+        logger.error("Subreddit search failed", agent_name=state["agent_name"], error=str(e))
+    
+    return state
+
+def fetch_posts_node(state: AgentState) -> AgentState:
+    """Fetch posts synchronously"""
+    if state.get("error"):
+        return state
+    
+    try:
+        # For now, just add a dummy post
+        state["posts"] = [{
+            "subreddit": "test",
+            "post_id": "123",
+            "post_title": "Test Post",
+            "post_body": "This is a test post",
+            "post_url": "https://reddit.com/r/test/123",
+            "relevance_score": 0.8
+        }]
+        logger.info("Fetched posts", agent_name=state["agent_name"], post_count=len(state["posts"]))
+        
+    except Exception as e:
+        state["error"] = f"Post fetching failed: {str(e)}"
+        logger.error("Fetch failure", error=str(e), agent_name=state["agent_name"])
+    
+    return state
+
+async def calculate_post_relevance(text: str, keywords: List[str], expectation: str) -> float:
+    """Calculate relevance score for a post"""
+    try:
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-1.5-flash",
+            google_api_key=GOOGLE_API_KEY,
+            max_retries=2,
+            timeout=30
+        )
+        
+        prompt = PromptTemplate(
+            input_variables=["text", "keywords", "expectation"],
+            template=(
+                "Evaluate the relevance of this text to our marketing needs.\n\n"
+                "TEXT:\n{text}\n\n"
+                "KEYWORDS:\n{keywords}\n\n"
+                "EXPECTATION:\n{expectation}\n\n"
+                "Rate the relevance from 0.0 to 1.0, where:\n"
+                "- 0.0 means completely irrelevant\n"
+                "- 1.0 means perfectly relevant\n\n"
+                "Return ONLY the number, no explanation or formatting.\n"
+                "Example: 0.85"
+            )
+        )
+        
+        chain = LLMChain(llm=llm, prompt=prompt)
+        result = await chain.arun(
+            text=text,
+            keywords=", ".join(keywords),
+            expectation=expectation
+        )
+        
+        try:
+            score = float(result.strip())
+            return min(max(score, 0.0), 1.0)
+        except ValueError:
+            logger.warning("Failed to parse relevance score", result=result)
+            return 0.0
+            
+    except Exception as e:
+        logger.warning("Relevance calculation failed", error=str(e))
+        return 0.0
+
+def store_results_node(state: AgentState) -> AgentState:
+    """Store results in database synchronously"""
+    if state.get("error"):
+        return state
+        
     try:
         db = state["db"]
-        async with db.begin():
-            for post in state["posts"]:
-                reddit_post = RedditPostModel(
-                    agent_name=state["agent_name"],
-                    goals=state["goals"],
-                    instructions=state["instructions"],
-                    subreddit=post["subreddit"],
-                    post_id=post["post_id"],
-                    post_title=post["post_title"],
-                    post_body=post["post_body"],
-                    post_url=post["post_url"],
-                    relevance_score=post["relevance_score"],
-                )
-                db.add(reddit_post)
-            await db.commit()
-        logger.info("Stored Reddit posts", agent_name=state["agent_name"], post_count=len(state["posts"]))
+        for post in state["posts"]:
+            reddit_post = RedditPostModel(
+                agent_name=state["agent_name"],
+                goals=",".join(state["goals"]),
+                instructions=state["instructions"],
+                subreddit=post["subreddit"],
+                post_id=post["post_id"],
+                post_title=post["post_title"],
+                post_body=post["post_body"],
+                post_url=post["post_url"],
+                relevance_score=post["relevance_score"],
+                created_at=datetime.utcnow()
+            )
+            db.add(reddit_post)
+        db.commit()
+            
+        logger.info(
+            "Stored Reddit posts",
+            agent_name=state["agent_name"],
+            post_count=len(state["posts"])
+        )
+        
     except Exception as e:
         state["error"] = f"Database error: {str(e)}"
         logger.error("Database error", agent_name=state["agent_name"], error=str(e))
+        
     return state
-
 
 def create_workflow_graph():
     """Create the workflow graph"""
     graph = StateGraph(AgentState)
     
-    # Create a mock agent object with required attributes
-    mock_agent = type('MockAgent', (), {
-        'agent_name': 'mock_agent',
-        'goals': 'increase brand awareness',
-        'instructions': '',
-        'advanced_settings': {
-            'description': '',
-            'expectation': '',
-            'target_audience': '',
-            'company_keywords': [],
-            'min_upvotes': 0,
-            'max_age_days': 7,
-            'restrict_to_goal_subreddits': False
-        }
-    })
+    # Add nodes
+    graph.add_node("validate_input", validate_input_node)
+    graph.add_node("search_subreddits", search_subreddits_node)
+    graph.add_node("fetch_posts", fetch_posts_node)
+    graph.add_node("store_results", store_results_node)
     
-    # Create a temporary instance just to access the methods
-    temp_agent = RedditAgent(mock_agent, None)
-    
-    graph.add_node("validate_input", temp_agent.validate_input_node)
-    graph.add_node("search_subreddits", temp_agent.search_subreddits_node)
-    graph.add_node("fetch_posts", temp_agent.fetch_posts_node)
-    graph.add_node("store_results", temp_agent.store_results_node)
-    
+    # Set entry point and edges
     graph.set_entry_point("validate_input")
     graph.add_edge("validate_input", "search_subreddits")
     graph.add_edge("search_subreddits", "fetch_posts")
@@ -856,8 +278,43 @@ def create_workflow_graph():
 # Create the graph once at module level
 reddit_graph = create_workflow_graph()
 
+def run_sync_workflow(state: dict) -> dict:
+    """Run the workflow synchronously (for Celery)"""
+    try:
+        # Create a synchronous version of the workflow
+        sync_graph = StateGraph(AgentState)
+        
+        # Add synchronous versions of the nodes
+        sync_graph.add_node("validate_input", validate_input_node)
+        sync_graph.add_node("search_subreddits", search_subreddits_node)
+        sync_graph.add_node("fetch_posts", fetch_posts_node)
+        sync_graph.add_node("store_results", store_results_node)
+        
+        # Set entry point and edges
+        sync_graph.set_entry_point("validate_input")
+        sync_graph.add_edge("validate_input", "search_subreddits")
+        sync_graph.add_edge("search_subreddits", "fetch_posts")
+        sync_graph.add_edge("fetch_posts", "store_results")
+        sync_graph.add_edge("store_results", END)
+        
+        # Run the workflow synchronously
+        compiled_graph = sync_graph.compile()
+        result = compiled_graph.invoke(state)
+        
+        # Ensure any pending database operations are committed
+        if result.get("db"):
+            result["db"].commit()
+        
+        return result
+        
+    except Exception as e:
+        logger.error("Sync workflow failed", error=str(e))
+        state["error"] = str(e)
+        return state
+
 @router.post("/reddit/reddit-agent", dependencies=[Depends(RateLimiter(times=5, seconds=60))])
 async def run_reddit_agent(input: RedditAgentInput, db: AsyncSession = Depends(get_db)):
+    """Run the Reddit agent workflow"""
     try:
         initial_state = AgentState(
             agent_name=input.agent_name,
@@ -874,13 +331,20 @@ async def run_reddit_agent(input: RedditAgentInput, db: AsyncSession = Depends(g
             posts=[],
             retries=0,
             error=None,
-            db=db  # Pass db session to state
+            db=db
         )
         
         result = await reddit_graph.ainvoke(initial_state)
         
+        if result.get("error"):
+            raise HTTPException(status_code=500, detail=result["error"])
+            
+        return {
+            "status": "completed",
+            "subreddits": result["subreddits"],
+            "posts": result["posts"]
+        }
         
-
     except Exception as e:
         logger.error("Reddit agent processing failed", agent_name=input.agent_name, error=str(e))
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")

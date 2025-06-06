@@ -13,19 +13,19 @@ logger = structlog.get_logger()
 load_dotenv()
 
 # Get database configuration
-POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
+POSTGRES_USER = os.getenv("POSTGRES_USER", "test")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "test")
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgres")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
-POSTGRES_DB = os.getenv("POSTGRES_DB", "ragent")
+POSTGRES_DB = os.getenv("POSTGRES_DB", "agent")
 
 # Construct DSN if not provided
 POSTGRES_DSN = os.getenv("POSTGRES_DSN") or f"postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-SYNC_POSTGRES_DSN = os.getenv("POSTGRES_DSN") or f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+SYNC_POSTGRES_DSN = os.getenv("SYNC_POSTGRES_DSN") or f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 
 # SQLAlchemy setup
 engine = create_async_engine(POSTGRES_DSN, echo=False)
-sync_engine = create_engine(SYNC_POSTGRES_DSN, echo=False)
+sync_engine = create_engine(SYNC_POSTGRES_DSN, echo=False, pool_pre_ping=True)
 
 # Create session makers
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -39,4 +39,9 @@ async def init_db():
 # Dependency for async session
 async def get_db():
     async with AsyncSessionLocal() as session:
+        yield session
+
+# Dependency for sync session
+def get_sync_db():
+    with SessionLocal() as session:
         yield session 

@@ -6,30 +6,49 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=test
+      - POSTGRES_PASSWORD=test
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=ragent
-      - POSTGRES_DSN=postgresql+asyncpg://postgres:postgres@postgres:5432/ragent
+      - POSTGRES_DB=agent
+      - POSTGRES_DSN=postgresql+asyncpg://test:test@postgres:5432/agent
+      - SYNC_POSTGRES_DSN=postgresql+psycopg2://test:test@postgres:5432/agent
       - REDIS_URL=redis://redis:6379/0
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+      - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
+      - REDDIT_USERNAME=${REDDIT_USERNAME}
+      - REDDIT_PASSWORD=${REDDIT_PASSWORD}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: >
+      sh -c "
+        alembic revision --autogenerate -m 'initial' &&
+        alembic upgrade head &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
 
   celery_worker:
     build: .
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=test
+      - POSTGRES_PASSWORD=test
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=ragent
-      - POSTGRES_DSN=postgresql+asyncpg://postgres:postgres@postgres:5432/ragent
+      - POSTGRES_DB=agent
+      - POSTGRES_DSN=postgresql+asyncpg://test:test@postgres:5432/agent
+      - SYNC_POSTGRES_DSN=postgresql+psycopg2://test:test@postgres:5432/agent
       - REDIS_URL=redis://redis:6379/0
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+      - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
+      - REDDIT_USERNAME=${REDDIT_USERNAME}
+      - REDDIT_PASSWORD=${REDDIT_PASSWORD}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,13 +59,20 @@ services:
   celery_beat:
     build: .
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=test
+      - POSTGRES_PASSWORD=test
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=ragent
-      - POSTGRES_DSN=postgresql+asyncpg://postgres:postgres@postgres:5432/ragent
+      - POSTGRES_DB=agent
+      - POSTGRES_DSN=postgresql+asyncpg://test:test@postgres:5432/agent
+      - SYNC_POSTGRES_DSN=postgresql+psycopg2://test:test@postgres:5432/agent
       - REDIS_URL=redis://redis:6379/0
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+      - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
+      - REDDIT_USERNAME=${REDDIT_USERNAME}
+      - REDDIT_PASSWORD=${REDDIT_PASSWORD}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,13 +85,20 @@ services:
     ports:
       - "5555:5555"
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=test
+      - POSTGRES_PASSWORD=test
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=ragent
-      - POSTGRES_DSN=postgresql+asyncpg://postgres:postgres@postgres:5432/ragent
+      - POSTGRES_DB=agent
+      - POSTGRES_DSN=postgresql+asyncpg://test:test@postgres:5432/agent
+      - SYNC_POSTGRES_DSN=postgresql+psycopg2://test:test@postgres:5432/agent
       - REDIS_URL=redis://redis:6379/0
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+      - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
+      - REDDIT_USERNAME=${REDDIT_USERNAME}
+      - REDDIT_PASSWORD=${REDDIT_PASSWORD}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,15 +109,15 @@ services:
   postgres:
     image: postgres:15
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=ragent
+      - POSTGRES_USER=test
+      - POSTGRES_PASSWORD=test
+      - POSTGRES_DB=agent
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U test"]
       interval: 5s
       timeout: 5s
       retries: 5
