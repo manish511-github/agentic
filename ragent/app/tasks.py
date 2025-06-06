@@ -4,17 +4,72 @@ from datetime import datetime
 from .database import SessionLocal
 from . import models
 from app.celery_app import celery_app
-from app.models import AgentModel, AgentResultModel
+from app.models import AgentModel, AgentResultModel, RedditPostModel
 from app.rdagent import reddit_graph
 from app.websocket import manager
 import structlog
 import asyncio
 import nest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine
+import os
+import copy
 
 logger = structlog.get_logger()
 
 # Apply nest_asyncio to allow nested event loops
 nest_asyncio.apply()
+
+# Create async engine and session factory for the workflow
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/ragent")
+engine = create_async_engine(DATABASE_URL)
+async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+def extract_storable_data(state):
+    """Extract only the necessary data from state that can be stored"""
+    try:
+        # If there's an error, just return the error message
+        if state.get("error"):
+            return {"error": str(state["error"])}
+            
+        # Create a new dictionary with only the data we need
+        storable_data = {
+            "agent_name": state.get("agent_name"),
+            "goals": state.get("goals", []),
+            "instructions": state.get("instructions"),
+            "description": state.get("description"),
+            "expectation": state.get("expectation"),
+            "target_audience": state.get("target_audience"),
+            "company_keywords": state.get("company_keywords", []),
+            "min_upvotes": state.get("min_upvotes", 0),
+            "max_age_days": state.get("max_age_days", 7),
+            "restrict_to_goal_subreddits": state.get("restrict_to_goal_subreddits", False),
+            "subreddits": state.get("subreddits", []),
+            "posts": [
+                {
+                    "subreddit": post.get("subreddit"),
+                    "post_id": post.get("post_id"),
+                    "post_title": post.get("post_title"),
+                    "post_body": post.get("post_body"),
+                    "post_url": post.get("post_url"),
+                    "relevance_score": post.get("relevance_score"),
+                    "comment_count": post.get("comment_count"),
+                    "upvote_comment_ratio": post.get("upvote_comment_ratio"),
+                    "upvotes": post.get("upvotes"),
+                    "created": post.get("created"),
+                    "sort_method": post.get("sort_method")
+                }
+                for post in state.get("posts", [])
+            ],
+            "retries": state.get("retries", 0)
+        }
+        
+        # Remove any None values to keep the data clean
+        return {k: v for k, v in storable_data.items() if v is not None}
+    except Exception as e:
+        # If anything goes wrong during extraction, return the error
+        return {"error": str(e)}
 
 @shared_task
 def run_agent_tasks():
@@ -68,40 +123,65 @@ def run_agent(agent_id: int):
             
             # Process based on platform
             if agent.agent_platform == "reddit":
-                # Prepare initial state
-                initial_state = {
-                    "agent_name": agent.agent_name,
-                    "goals": agent.goals.split(",") if agent.goals else [],
-                    "instructions": agent.instructions,
-                    "description": agent.project.description or "",
-                    "expectation": agent.expectations or "",
-                    "target_audience": agent.project.target_audience or "",
-                    "company_keywords": agent.project.keywords or [],
-                    "min_upvotes": agent.advanced_settings.get("min_upvotes", 0),
-                    "max_age_days": agent.advanced_settings.get("max_age_days", 7),
-                    "restrict_to_goal_subreddits": agent.advanced_settings.get("restrict_to_goal_subreddits", False),
-                    "subreddits": [],
-                    "posts": [],
-                    "retries": 0,
-                    "error": None,
-                    "db": session
-                }
-                
                 # Create new event loop for this task
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 
                 try:
-                    result = loop.run_until_complete(reddit_graph.ainvoke(initial_state))
+                    # Create async session for the workflow
+                    async def run_workflow():
+                        async with async_session() as async_db:
+                            # Prepare initial state
+                            initial_state = {
+                                "agent_name": agent.agent_name,
+                                "goals": agent.goals.split(",") if agent.goals else [],
+                                "instructions": agent.instructions,
+                                "description": agent.project.description or "",
+                                "expectation": agent.expectations or "",
+                                "target_audience": agent.project.target_audience or "",
+                                "company_keywords": agent.project.keywords or [],
+                                "min_upvotes": agent.advanced_settings.get("min_upvotes", 0),
+                                "max_age_days": agent.advanced_settings.get("max_age_days", 7),
+                                "restrict_to_goal_subreddits": agent.advanced_settings.get("restrict_to_goal_subreddits", False),
+                                "subreddits": [],
+                                "posts": [],
+                                "retries": 0,
+                                "error": None,
+                                "db": async_db
+                            }
+                            
+                            result = await reddit_graph.ainvoke(initial_state)
+                            return result
+                    
+                    # Run the workflow
+                    result = loop.run_until_complete(run_workflow())
                     logger.info("Agent execution completed", agent_id=agent_id, result=result)
                     
-                    if not result.get("error"):
-                        # Save results
+                    # Extract storable data from result
+                    storable_data = extract_storable_data(result)
+                    
+                    if not storable_data.get("error"):
+                        # Store Reddit posts
+                        for post in result.get("posts", []):
+                            reddit_post = RedditPostModel(
+                                agent_name=agent.agent_name,
+                                goals=agent.goals.split(",") if agent.goals else [],
+                                instructions=agent.instructions,
+                                subreddit=post["subreddit"],
+                                post_id=post["post_id"],
+                                post_title=post["post_title"],
+                                post_body=post["post_body"],
+                                post_url=post["post_url"],
+                                relevance_score=post["relevance_score"],
+                            )
+                            session.add(reddit_post)
+                        
+                        # Save agent results
                         agent_result = AgentResultModel(
                             agent_id=agent.id,
                             project_id=agent.project_id,
                             status="completed",
-                            results=result,
+                            results=storable_data,
                         )
                         session.add(agent_result)
                         
@@ -117,7 +197,7 @@ def run_agent(agent_id: int):
                                 "data": {
                                     "agent_id": agent.id,
                                     "status": "completed",
-                                    "result": result
+                                    "result": storable_data
                                 }
                             }
                         )
@@ -127,7 +207,7 @@ def run_agent(agent_id: int):
                             agent_id=agent.id,
                             project_id=agent.project_id,
                             status="error",
-                            results=None,
+                            results=storable_data,
                         )
                         session.add(agent_result)
                         
@@ -142,7 +222,7 @@ def run_agent(agent_id: int):
                                 "type": "agent_error",
                                 "data": {
                                     "agent_id": agent.id,
-                                    "error": result["error"]
+                                    "error": storable_data["error"]
                                 }
                             }
                         )
@@ -181,7 +261,7 @@ def run_agent(agent_id: int):
                         agent_id=agent.id,
                         project_id=agent.project_id,
                         status="error",
-                        results=None,
+                        results={"error": str(e)},
                     )
                     session.add(agent_result)
                     session.commit()

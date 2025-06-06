@@ -1,4 +1,3 @@
-
 import math
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi_limiter.depends import RateLimiter
@@ -156,14 +155,33 @@ async def get_reddit_client():
     )
     return reddit
 
+GOAL_MAPPING = {
+    "lead_generation": "grow web traffic",
+    "brand_awareness": "increase brand awareness",
+    "engagement": "engage potential customers",
+    "support": "engage potential customers"  # Mapping support to engagement as it's closest
+}
+
+def map_agent_goals(agent_goals: List[str]) -> List[str]:
+    """Map agent goals to Reddit agent goals"""
+    mapped_goals = []
+    for goal in agent_goals:
+        mapped_goal = GOAL_MAPPING.get(goal.lower())
+        if mapped_goal and mapped_goal not in mapped_goals:
+            mapped_goals.append(mapped_goal)
+    return mapped_goals if mapped_goals else ["increase brand awareness"]
+
 async def validate_input_node(state: AgentState) -> AgentState:
-    import rpdb
-    rpdb.set_trace()
     valid_goals = ["increase brand awareness", "engage potential customers", "grow web traffic"]
+    if state["goals"]:
+        mapped_goals = map_agent_goals(state["goals"])
+        state["goals"] = mapped_goals
+
     if not all(goal.lower() in valid_goals for goal in state["goals"]):
         state["error"] = f"Invalid goals. Choose from: {valid_goals}"
         logger.info(f"Invalid goals. Choose from: {valid_goals}")
         return state
+    
     state["retries"] = 0
     state["subreddits"] = []
     state["posts"] = []
@@ -656,48 +674,18 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
 
     return state
 
-async def store_results_node(state: AgentState) -> AgentState:
-    if state.get("error"):
-        return state
-    try:
-        db = state["db"]
-        async with db.begin():
-            for post in state["posts"]:
-                reddit_post = RedditPostModel(
-                    agent_name=state["agent_name"],
-                    goals=state["goals"],
-                    instructions=state["instructions"],
-                    subreddit=post["subreddit"],
-                    post_id=post["post_id"],
-                    post_title=post["post_title"],
-                    post_body=post["post_body"],
-                    post_url=post["post_url"],
-                    relevance_score=post["relevance_score"],
-                )
-                db.add(reddit_post)
-            await db.commit()
-        logger.info("Stored Reddit posts", agent_name=state["agent_name"], post_count=len(state["posts"]))
-    except Exception as e:
-        state["error"] = f"Database error: {str(e)}"
-        logger.error("Database error", agent_name=state["agent_name"], error=str(e))
-    return state
-
-
 def create_graph():
     graph = StateGraph(AgentState)
 
     graph.add_node("validate_input", validate_input_node)
     graph.add_node("search_subreddits", search_subreddits_node)
     graph.add_node("fetch_posts", fetch_posts_node)
-    graph.add_node("store_results", store_results_node)
 
     graph.set_entry_point("validate_input")
     
     graph.add_edge("validate_input", "search_subreddits")
     graph.add_edge("search_subreddits", "fetch_posts")
-    graph.add_edge("fetch_posts", "store_results")
-
-    graph.add_edge("store_results", END)
+    graph.add_edge("fetch_posts", END)
     return graph.compile()
 
 reddit_graph = create_graph()
