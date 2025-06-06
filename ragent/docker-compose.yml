@@ -34,27 +34,26 @@ services:
 
   celery_worker:
     build: .
+    command: celery -A app.celery_app worker --loglevel=info
+    volumes:
+      - .:/app
     environment:
-      - POSTGRES_USER=test
-      - POSTGRES_PASSWORD=test
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=agent
-      - POSTGRES_DSN=postgresql+asyncpg://test:test@postgres:5432/agent
-      - SYNC_POSTGRES_DSN=postgresql+psycopg2://test:test@postgres:5432/agent
-      - REDIS_URL=redis://redis:6379/0
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - POSTGRES_DSN=${POSTGRES_DSN}
+      - SYNC_POSTGRES_DSN=${SYNC_POSTGRES_DSN}
+      - REDIS_DSN=${REDIS_DSN}
       - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
       - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
       - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
       - REDDIT_USERNAME=${REDDIT_USERNAME}
       - REDDIT_PASSWORD=${REDDIT_PASSWORD}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+    ports:
+      - "4444:4444"  # Debug port
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: celery -A app.celery_app worker --loglevel=info
 
   celery_beat:
     build: .

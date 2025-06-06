@@ -5,11 +5,16 @@ from .database import SessionLocal
 from . import models
 from app.celery_app import celery_app
 from app.models import AgentModel, AgentResultModel
-from app.rdagent import run_sync_workflow
+from app.rdagent import reddit_graph
 from app.websocket import manager
 import structlog
+import asyncio
+import nest_asyncio
 
 logger = structlog.get_logger()
+
+# Apply nest_asyncio to allow nested event loops
+nest_asyncio.apply()
 
 @shared_task
 def run_agent_tasks():
@@ -62,16 +67,16 @@ def run_agent(agent_id: int):
             )
             
             # Process based on platform
-            if agent.platform == "reddit":
+            if agent.agent_platform == "reddit":
                 # Prepare initial state
-                state = {
+                initial_state = {
                     "agent_name": agent.agent_name,
                     "goals": agent.goals.split(",") if agent.goals else [],
                     "instructions": agent.instructions,
-                    "description": agent.advanced_settings.get("description", ""),
-                    "expectation": agent.advanced_settings.get("expectation", ""),
-                    "target_audience": agent.advanced_settings.get("target_audience", ""),
-                    "company_keywords": agent.advanced_settings.get("company_keywords", []),
+                    "description": agent.project.description or "",
+                    "expectation": agent.expectations or "",
+                    "target_audience": agent.project.target_audience or "",
+                    "company_keywords": agent.project.keywords or [],
                     "min_upvotes": agent.advanced_settings.get("min_upvotes", 0),
                     "max_age_days": agent.advanced_settings.get("max_age_days", 7),
                     "restrict_to_goal_subreddits": agent.advanced_settings.get("restrict_to_goal_subreddits", False),
@@ -82,62 +87,83 @@ def run_agent(agent_id: int):
                     "db": session
                 }
                 
-                # Run workflow
-                result = run_sync_workflow(state)
+                # Create new event loop for this task
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
                 
-                if not result.get("error"):
-                    # Save results
-                    agent_result = AgentResultModel(
-                        agent_id=agent.id,
-                        status="completed",
-                        result_data=result,
-                        error=None
-                    )
-                    session.add(agent_result)
+                try:
+                    result = loop.run_until_complete(reddit_graph.ainvoke(initial_state))
+                    logger.info("Agent execution completed", agent_id=agent_id, result=result)
                     
-                    # Update agent status
-                    agent.agent_status = "completed"
-                    session.commit()
-                    
-                    # Send success notification
-                    manager.broadcast_to_project(
-                        agent.project_id,
-                        {
-                            "type": "agent_result",
-                            "data": {
-                                "agent_id": agent.id,
-                                "status": "completed",
-                                "result": result
+                    if not result.get("error"):
+                        # Save results
+                        agent_result = AgentResultModel(
+                            agent_id=agent.id,
+                            project_id=agent.project_id,
+                            status="completed",
+                            results=result,
+                        )
+                        session.add(agent_result)
+                        
+                        # Update agent status
+                        agent.agent_status = "completed"
+                        session.commit()
+                        
+                        # Send success notification
+                        manager.broadcast_to_project(
+                            agent.project_id,
+                            {
+                                "type": "agent_result",
+                                "data": {
+                                    "agent_id": agent.id,
+                                    "status": "completed",
+                                    "result": result
+                                }
                             }
-                        }
-                    )
-                else:
-                    # Handle error
-                    agent_result = AgentResultModel(
-                        agent_id=agent.id,
-                        status="error",
-                        result_data=None,
-                        error=result["error"]
-                    )
-                    session.add(agent_result)
-                    
-                    # Update agent status
-                    agent.agent_status = "error"
-                    session.commit()
-                    
-                    # Send error notification
-                    manager.broadcast_to_project(
-                        agent.project_id,
-                        {
-                            "type": "agent_error",
-                            "data": {
-                                "agent_id": agent.id,
-                                "error": result["error"]
+                        )
+                    else:
+                        # Handle error
+                        agent_result = AgentResultModel(
+                            agent_id=agent.id,
+                            project_id=agent.project_id,
+                            status="error",
+                            results=None,
+                        )
+                        session.add(agent_result)
+                        
+                        # Update agent status
+                        agent.agent_status = "error"
+                        session.commit()
+                        
+                        # Send error notification
+                        manager.broadcast_to_project(
+                            agent.project_id,
+                            {
+                                "type": "agent_error",
+                                "data": {
+                                    "agent_id": agent.id,
+                                    "error": result["error"]
+                                }
                             }
-                        }
-                    )
+                        )
+                finally:
+                    # Clean up the event loop
+                    try:
+                        # Cancel all running tasks
+                        pending = asyncio.all_tasks(loop)
+                        for task in pending:
+                            task.cancel()
+                        
+                        # Run the loop until all tasks are cancelled
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        
+                        # Stop the loop
+                        loop.stop()
+                        loop.close()
+                    except Exception as e:
+                        logger.warning("Error cleaning up event loop", error=str(e))
             else:
-                logger.warning("Unsupported platform", platform=agent.platform)
+                logger.warning("Unsupported platform", platform=agent.agent_platform)
                     
     except Exception as e:
         logger.error("Agent processing failed", agent_id=agent_id, error=str(e))
@@ -153,9 +179,9 @@ def run_agent(agent_id: int):
                     # Save error result
                     agent_result = AgentResultModel(
                         agent_id=agent.id,
+                        project_id=agent.project_id,
                         status="error",
-                        result_data=None,
-                        error=str(e)
+                        results=None,
                     )
                     session.add(agent_result)
                     session.commit()
