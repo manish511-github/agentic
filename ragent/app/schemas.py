@@ -103,11 +103,27 @@ class Agent(AgentBase):
     class Config:
         orm_mode = True
 
+class RedditPost(BaseModel):
+    subreddit: str
+    post_id: str
+    post_title: str
+    post_body: str
+    post_url: str
+    relevance_score: float
+    sentiment_score: Optional[float] = None
+    comment_draft: Optional[str] = None
+    status: Optional[str] = None
+    created_at: str
+
+    class Config:
+        orm_mode = True
+
 class AgentResult(BaseModel):
     id: int
     agent_id: int
+    project_id: int
     status: str
-    result_data: Optional[Dict] = None
+    results: Optional[Dict] = None
     error: Optional[str] = None
     created_at: datetime
 

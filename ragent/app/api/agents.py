@@ -237,4 +237,37 @@ async def get_agent_results(
         .order_by(models.AgentResultModel.created_at.desc())
     )
     results = result.scalars().all()
+
+    # Get associated posts for each result
+    for result_item in results:
+        if result_item.status == "completed" and result_item.results:
+            # Get posts from RedditPostModel for this agent
+            posts_result = await db.execute(
+                select(models.RedditPostModel)
+                .filter(
+                    models.RedditPostModel.agent_name == agent.agent_name,
+                    models.RedditPostModel.created_at >= result_item.created_at
+                )
+                .order_by(models.RedditPostModel.created_at.desc())
+            )
+            posts = posts_result.scalars().all()
+            
+            # Add posts to the results
+            if posts:
+                result_item.results["posts"] = [
+                    {
+                        "subreddit": post.subreddit,
+                        "post_id": post.post_id,
+                        "post_title": post.post_title,
+                        "post_body": post.post_body,
+                        "post_url": post.post_url,
+                        "relevance_score": post.relevance_score,
+                        "sentiment_score": post.sentiment_score,
+                        "comment_draft": post.comment_draft,
+                        "status": post.status,
+                        "created_at": post.created_at.isoformat()
+                    }
+                    for post in posts
+                ]
+
     return results 

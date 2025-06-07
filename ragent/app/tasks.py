@@ -6,7 +6,6 @@ from . import models
 from app.celery_app import celery_app
 from app.models import AgentModel, AgentResultModel, RedditPostModel
 from app.rdagent import reddit_graph
-from app.websocket import manager
 import structlog
 import asyncio
 import nest_asyncio
@@ -15,6 +14,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine
 import os
 import copy
+from typing import Dict, Set, Tuple
+import json
 
 logger = structlog.get_logger()
 
@@ -25,6 +26,37 @@ nest_asyncio.apply()
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/ragent")
 engine = create_async_engine(DATABASE_URL)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+# Store active SSE connections for each project-agent pair
+project_agent_connections: Dict[Tuple[int, int], Set[asyncio.Queue]] = {}
+
+async def add_project_agent_connection(project_id: int, agent_id: int) -> asyncio.Queue:
+    """Add a new SSE connection for a project-agent pair"""
+    key = (project_id, agent_id)
+    if key not in project_agent_connections:
+        project_agent_connections[key] = set()
+    
+    queue = asyncio.Queue()
+    project_agent_connections[key].add(queue)
+    return queue
+
+async def remove_project_agent_connection(project_id: int, agent_id: int, queue: asyncio.Queue):
+    """Remove an SSE connection for a project-agent pair"""
+    key = (project_id, agent_id)
+    if key in project_agent_connections:
+        project_agent_connections[key].discard(queue)
+        if not project_agent_connections[key]:
+            del project_agent_connections[key]
+
+async def send_project_agent_update(project_id: int, agent_id: int, message: dict):
+    """Send an update to all connections for a specific project-agent pair"""
+    key = (project_id, agent_id)
+    if key in project_agent_connections:
+        for queue in project_agent_connections[key]:
+            try:
+                await queue.put(message)
+            except Exception as e:
+                logger.error("Failed to send SSE message", error=str(e))
 
 def extract_storable_data(state):
     """Extract only the necessary data from state that can be stored"""
@@ -108,19 +140,6 @@ def run_agent(agent_id: int):
             agent.last_run = datetime.utcnow()
             session.commit()
             
-            # Send WebSocket notification
-            manager.broadcast_to_project(
-                agent.project_id,
-                {
-                    "type": "agent_status",
-                    "data": {
-                        "agent_id": agent.id,
-                        "status": "running",
-                        "message": "Agent started processing"
-                    }
-                }
-            )
-            
             # Process based on platform
             if agent.agent_platform == "reddit":
                 # Create new event loop for this task
@@ -189,18 +208,21 @@ def run_agent(agent_id: int):
                         agent.agent_status = "completed"
                         session.commit()
                         
-                        # Send success notification
-                        manager.broadcast_to_project(
-                            agent.project_id,
-                            {
-                                "type": "agent_result",
+                        # Send completion update via SSE
+                        asyncio.run(send_project_agent_update(
+                            project_id=agent.project_id,
+                            agent_id=agent.id,
+                            message={
+                                "type": "agent_complete",
                                 "data": {
+                                    "project_id": agent.project_id,
                                     "agent_id": agent.id,
                                     "status": "completed",
-                                    "result": storable_data
+                                    "posts_found": len(storable_data.get("posts", [])),
+                                    "timestamp": datetime.utcnow().isoformat()
                                 }
                             }
-                        )
+                        ))
                     else:
                         # Handle error
                         agent_result = AgentResultModel(
@@ -215,17 +237,20 @@ def run_agent(agent_id: int):
                         agent.agent_status = "error"
                         session.commit()
                         
-                        # Send error notification
-                        manager.broadcast_to_project(
-                            agent.project_id,
-                            {
+                        # Send error update via SSE
+                        asyncio.run(send_project_agent_update(
+                            project_id=agent.project_id,
+                            agent_id=agent.id,
+                            message={
                                 "type": "agent_error",
                                 "data": {
+                                    "project_id": agent.project_id,
                                     "agent_id": agent.id,
-                                    "error": storable_data["error"]
+                                    "error": storable_data["error"],
+                                    "timestamp": datetime.utcnow().isoformat()
                                 }
                             }
-                        )
+                        ))
                 finally:
                     # Clean up the event loop
                     try:
@@ -266,16 +291,19 @@ def run_agent(agent_id: int):
                     session.add(agent_result)
                     session.commit()
                     
-                    # Send error notification
-                    manager.broadcast_to_project(
-                        agent.project_id,
-                        {
+                    # Send error update via SSE
+                    asyncio.run(send_project_agent_update(
+                        project_id=agent.project_id,
+                        agent_id=agent.id,
+                        message={
                             "type": "agent_error",
                             "data": {
+                                "project_id": agent.project_id,
                                 "agent_id": agent.id,
-                                "error": str(e)
+                                "error": str(e),
+                                "timestamp": datetime.utcnow().isoformat()
                             }
                         }
-                    )
+                    ))
         except Exception as inner_e:
             logger.error("Failed to handle error state", agent_id=agent_id, error=str(inner_e)) 
