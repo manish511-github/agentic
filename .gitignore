@@ -5,3 +5,8 @@ file.py
 file2
 pandoc-3.7-x86_64-macOS.pkg
 ragent/app/qwerty.txt
+*.pyc
+*.log
+*.csv
+*.json
+__pycache__/
