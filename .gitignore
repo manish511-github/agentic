@@ -10,3 +10,8 @@ ragent/app/qwerty.txt
 *.csv
 *.json
 __pycache__/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
