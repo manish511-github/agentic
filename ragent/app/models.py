@@ -60,6 +60,7 @@ class ProjectModel(Base):
     owner = relationship("UserModel", back_populates="projects")
 
     agents = relationship("AgentModel", back_populates="project")
+    agent_results = relationship("AgentResultModel", back_populates="project")
 
 class UserModel(Base):
     __tablename__ = "users"
@@ -88,6 +89,22 @@ class AgentModel(Base):
     advanced_settings = Column(JSON, default={})
     platform_settings = Column(JSON)  # Platform-specific settings
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_run = Column(DateTime(timezone=True), nullable=True)  # Track last run time
 
     # Relationships
     project = relationship("ProjectModel", back_populates="agents")
+    results = relationship("AgentResultModel", back_populates="agent")
+
+class AgentResultModel(Base):
+    __tablename__ = "agent_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"))
+    project_id = Column(Integer, ForeignKey("projects.id"))
+    results = Column(JSON)
+    status = Column(String)  # completed, error
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    agent = relationship("AgentModel", back_populates="results")
+    project = relationship("ProjectModel", back_populates="agent_results")
