@@ -6,6 +6,7 @@ import os
 from dotenv import load_dotenv
 from app.agent import router as agent_router
 from app.rdagent import router as rdagent_router
+from app.xagent import router as xdagent_router
 from app.auth import router as auth_router 
 from app.api.projects import router as projects_router 
 from app.api.agents import router as agents_router  # Import the agents router
@@ -52,6 +53,7 @@ async def startup_event():
 # Mount router
 app.include_router(agent_router)
 app.include_router(rdagent_router)
+app.include_router(xdagent_router)
 app.include_router(auth_router, prefix="/auth", tags=["auth"]) # Include the auth router
 app.include_router(projects_router) 
 app.include_router(agents_router)  # Include the agents router
