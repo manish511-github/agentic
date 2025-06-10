@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..database import get_db
 from .. import models, schemas
@@ -241,33 +241,70 @@ async def get_agent_results(
     # Get associated posts for each result
     for result_item in results:
         if result_item.status == "completed" and result_item.results:
-            # Get posts from RedditPostModel for this agent
-            posts_result = await db.execute(
-                select(models.RedditPostModel)
-                .filter(
-                    models.RedditPostModel.agent_name == agent.agent_name,
-                    models.RedditPostModel.created_at >= result_item.created_at
-                )
-                .order_by(models.RedditPostModel.created_at.desc())
-            )
-            posts = posts_result.scalars().all()
+            # Add agent_platform to results
+            result_item.results["agent_platform"] = agent.agent_platform
             
-            # Add posts to the results
-            if posts:
-                result_item.results["posts"] = [
-                    {
-                        "subreddit": post.subreddit,
-                        "post_id": post.post_id,
-                        "post_title": post.post_title,
-                        "post_body": post.post_body,
-                        "post_url": post.post_url,
-                        "relevance_score": post.relevance_score,
-                        "sentiment_score": post.sentiment_score,
-                        "comment_draft": post.comment_draft,
-                        "status": post.status,
-                        "created_at": post.created_at.isoformat()
-                    }
-                    for post in posts
-                ]
+            if agent.agent_platform == "reddit":
+                # Get posts from RedditPostModel for this agent
+                posts_result = await db.execute(
+                    select(models.RedditPostModel)
+                    .filter(
+                        models.RedditPostModel.agent_name == agent.agent_name,
+                        models.RedditPostModel.created_at >= result_item.created_at
+                    )
+                    .order_by(models.RedditPostModel.created_at.desc())
+                )
+                posts = posts_result.scalars().all()
+                
+                # Add posts to the results
+                if posts:
+                    result_item.results["posts"] = [
+                        {
+                            "subreddit": post.subreddit,
+                            "post_id": post.post_id,
+                            "post_title": post.post_title,
+                            "post_body": post.post_body,
+                            "post_url": post.post_url,
+                            "relevance_score": post.relevance_score,
+                            "sentiment_score": post.sentiment_score,
+                            "comment_draft": post.comment_draft,
+                            "status": post.status,
+                            "created_at": post.created_at.isoformat()
+                        }
+                        for post in posts
+                    ]
+            elif agent.agent_platform == "twitter":
+                # Get posts from TwitterPostModel for this agent
+                # Convert result_item.created_at to UTC if it has timezone info
+                created_at = result_item.created_at
+                if created_at.tzinfo is not None:
+                    created_at = created_at.astimezone(timezone.utc).replace(tzinfo=None)
+                
+                posts_result = await db.execute(
+                    select(models.TwitterPostModel)
+                    .filter(
+                        models.TwitterPostModel.agent_name == agent.agent_name,
+                        models.TwitterPostModel.created >= created_at
+                    )
+                    .order_by(models.TwitterPostModel.created.desc())
+                )
+                posts = posts_result.scalars().all()
+                
+                # Add posts to the results
+                if posts:
+                    result_item.results["posts"] = [
+                        {
+                            "tweet_id": post.tweet_id,
+                            "text": post.text,
+                            "user_name": post.user_name,
+                            "user_screen_name": post.user_screen_name,
+                            "retweet_count": post.retweet_count,
+                            "favorite_count": post.favorite_count,
+                            "relevance_score": post.relevance_score,
+                            "hashtags": post.hashtags,
+                            "created_at": post.created.isoformat() if post.created else None
+                        }
+                        for post in posts
+                    ]
 
     return results 

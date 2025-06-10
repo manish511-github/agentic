@@ -1,7 +1,8 @@
-from sqlalchemy import Column, Integer, String, Float, JSON, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, Float, JSON, DateTime, ForeignKey, Boolean, ARRAY
 from sqlalchemy.orm import DeclarativeBase, relationship
 from sqlalchemy.sql import func
 import uuid
+from datetime import datetime
 
 class Base(DeclarativeBase):
     pass
@@ -108,3 +109,21 @@ class AgentResultModel(Base):
     # Relationships
     agent = relationship("AgentModel", back_populates="results")
     project = relationship("ProjectModel", back_populates="agent_results")
+
+class TwitterPostModel(Base):
+    __tablename__ = "twitter_posts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_name = Column(String)
+    goals = Column(ARRAY(String))
+    instructions = Column(String)
+    tweet_id = Column(String)
+    text = Column(String)
+    created_at = Column(DateTime)
+    user_name = Column(String)
+    user_screen_name = Column(String)
+    retweet_count = Column(Integer)
+    favorite_count = Column(Integer)
+    relevance_score = Column(Float)
+    hashtags = Column(ARRAY(String))
+    created = Column(DateTime, default=datetime.utcnow)

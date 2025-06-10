@@ -4,8 +4,9 @@ from datetime import datetime
 from .database import SessionLocal
 from . import models
 from app.celery_app import celery_app
-from app.models import AgentModel, AgentResultModel, RedditPostModel, ProjectModel
+from app.models import AgentModel, AgentResultModel, RedditPostModel, ProjectModel, TwitterPostModel
 from app.rdagent import reddit_graph
+from app.xagent import twitter_graph
 import structlog
 import asyncio
 import nest_asyncio
@@ -13,11 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine
 import os
-import copy
-from typing import Dict, Set, Tuple, Optional
 import json
-import requests
 import redis
+from typing import Dict, Set, Tuple, Optional
 
 logger = structlog.get_logger()
 
@@ -269,6 +268,149 @@ def run_agent(agent_id: int):
                                 relevance_score=post["relevance_score"],
                             )
                             session.add(reddit_post)
+                        
+                        # Save agent results
+                        agent_result = AgentResultModel(
+                            agent_id=agent.id,
+                            project_id=agent.project_id,
+                            status="completed",
+                            results=storable_data,
+                        )
+                        session.add(agent_result)
+                        
+                        # Update agent status
+                        agent.agent_status = "completed"
+                        session.commit()
+                        
+                        # Send completion update
+                        send_project_agent_update(
+                            project_id=project_uuid,
+                            agent_id=agent.id,
+                            message={
+                                "type": "agent_status",
+                                "data": {
+                                    "project_id": project_uuid,
+                                    "agent_id": agent.id,
+                                    "status": "completed",
+                                    "timestamp": datetime.utcnow().isoformat()
+                                }
+                            }
+                        )
+                    else:
+                        # Handle error
+                        agent_result = AgentResultModel(
+                            agent_id=agent.id,
+                            project_id=agent.project_id,
+                            status="error",
+                            results=storable_data,
+                        )
+                        session.add(agent_result)
+                        
+                        # Update agent status
+                        agent.agent_status = "error"
+                        session.commit()
+                        
+                        # Send error update
+                        send_project_agent_update(
+                            project_id=project_uuid,
+                            agent_id=agent.id,
+                            message={
+                                "type": "agent_status",
+                                "data": {
+                                    "project_id": project_uuid,
+                                    "agent_id": agent.id,
+                                    "status": "error",
+                                    "error": storable_data["error"],
+                                    "timestamp": datetime.utcnow().isoformat()
+                                }
+                            }
+                        )
+                finally:
+                    # Clean up the event loop
+                    try:
+                        # Cancel all running tasks
+                        pending = asyncio.all_tasks(loop)
+                        for task in pending:
+                            task.cancel()
+                        
+                        # Run the loop until all tasks are cancelled
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        
+                        # Stop the loop
+                        loop.stop()
+                        loop.close()
+                    except Exception as e:
+                        logger.warning("Error cleaning up event loop", error=str(e))
+            elif agent.agent_platform == "twitter":
+                # Create new event loop for this task
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                try:
+                    # Send processing status
+                    send_project_agent_update(
+                        project_id=project_uuid,
+                        agent_id=agent.id,
+                        message={
+                            "type": "agent_status",
+                            "data": {
+                                "project_id": project_uuid,
+                                "agent_id": agent.id,
+                                "status": "processing",
+                                "timestamp": datetime.utcnow().isoformat()
+                            }
+                        }
+                    )
+
+                    # Create async session for the workflow
+                    async def run_workflow():
+                        async with async_session() as async_db:
+                            # Prepare initial state
+                            initial_state = {
+                                "agent_name": agent.agent_name,
+                                "goals": agent.goals.split(",") if agent.goals else [],
+                                "instructions": agent.instructions,
+                                "description": agent.project.description or "",
+                                "expectation": agent.expectations or "",
+                                "target_audience": agent.project.target_audience or "",
+                                "company_keywords": agent.project.keywords or [],
+                                "min_likes": agent.advanced_settings.get("min_likes", 0),
+                                "max_age_days": agent.advanced_settings.get("max_age_days", 7),
+                                "hashtags": [],
+                                "tweets": [],
+                                "retries": 0,
+                                "error": None,
+                                "db": async_db
+                            }
+                            
+                            result = await twitter_graph.ainvoke(initial_state)
+                            return result
+                    
+                    # Run the workflow
+                    result = loop.run_until_complete(run_workflow())
+                    logger.info("Agent execution completed", agent_id=agent_id, result=result)
+                    
+                    # Extract storable data from result
+                    storable_data = extract_storable_data(result)
+                    
+                    if not storable_data.get("error"):
+                        # Store Twitter posts
+                        for tweet in result.get("tweets", []):
+                            twitter_post = TwitterPostModel(
+                                agent_name=agent.agent_name,
+                                goals=agent.goals.split(",") if agent.goals else [],
+                                instructions=agent.instructions,
+                                tweet_id=tweet["tweet_id"],
+                                text=tweet["text"],
+                                created_at=tweet["created_at"],
+                                user_name=tweet["username"],
+                                user_screen_name=tweet.get("user_screen_name", ""),
+                                retweet_count=tweet["retweets"],
+                                favorite_count=tweet["likes"],
+                                relevance_score=tweet.get("relevance_score", 0.0),
+                                hashtags=tweet.get("hashtags", [])
+                            )
+                            session.add(twitter_post)
                         
                         # Save agent results
                         agent_result = AgentResultModel(

@@ -16,6 +16,9 @@ services:
       - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
       - REDDIT_USERNAME=${REDDIT_USERNAME}
       - REDDIT_PASSWORD=${REDDIT_PASSWORD}
+      - TWITTER_USERNAME=${TWITTER_USERNAME}
+      - TWITTER_EMAIL=${TWITTER_EMAIL}
+      - TWITTER_PASSWORD=${TWITTER_PASSWORD}
     depends_on:
       postgres:
         condition: service_healthy
@@ -26,6 +29,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./ragent:/app
+      - twitter_cookies:/app/cookies
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app"
 
@@ -43,6 +47,9 @@ services:
       - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
       - REDDIT_USERNAME=${REDDIT_USERNAME}
       - REDDIT_PASSWORD=${REDDIT_PASSWORD}
+      - TWITTER_USERNAME=${TWITTER_USERNAME}
+      - TWITTER_EMAIL=${TWITTER_EMAIL}
+      - TWITTER_PASSWORD=${TWITTER_PASSWORD}
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,6 +60,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./ragent:/app
+      - twitter_cookies:/app/cookies
     command: celery -A app.celery_app worker --loglevel=info
 
   celery_beat:
@@ -69,6 +77,9 @@ services:
       - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
       - REDDIT_USERNAME=${REDDIT_USERNAME}
       - REDDIT_PASSWORD=${REDDIT_PASSWORD}
+      - TWITTER_USERNAME=${TWITTER_USERNAME}
+      - TWITTER_EMAIL=${TWITTER_EMAIL}
+      - TWITTER_PASSWORD=${TWITTER_PASSWORD}
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,6 +90,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./ragent:/app
+      - twitter_cookies:/app/cookies
     command: celery -A app.celery_app beat --loglevel=info
 
   flower:
@@ -89,12 +101,18 @@ services:
       - "5555:5555"
     environment:
       - REDIS_URL=${REDIS_URL}
+      - TWITTER_USERNAME=${TWITTER_USERNAME}
+      - TWITTER_EMAIL=${TWITTER_EMAIL}
+      - TWITTER_PASSWORD=${TWITTER_PASSWORD}
     depends_on:
       - redis
       - celery_worker
     networks:
       - market-network
     restart: unless-stopped
+    volumes:
+      - ./ragent:/app
+      - twitter_cookies:/app/cookies
     command: celery -A app.celery_app flower --port=5555
 
   postgres:
@@ -131,3 +149,4 @@ networks:
 
 volumes:
   postgres-data:
+  twitter_cookies:
