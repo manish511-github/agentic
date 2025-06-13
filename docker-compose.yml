@@ -19,6 +19,7 @@ services:
       - TWITTER_USERNAME=${TWITTER_USERNAME}
       - TWITTER_EMAIL=${TWITTER_EMAIL}
       - TWITTER_PASSWORD=${TWITTER_PASSWORD}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
