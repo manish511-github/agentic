@@ -11,6 +11,7 @@ from app.auth import router as auth_router
 from app.api.projects import router as projects_router 
 from app.api.agents import router as agents_router  # Import the agents router
 from app.sse import router as sse_router  # Add this import
+from app.api.generate_profile import router as agent_generator_router  # Import the agent generator router
 from app.database import init_db
 
 import math
@@ -58,6 +59,7 @@ app.include_router(auth_router, prefix="/auth", tags=["auth"]) # Include the aut
 app.include_router(projects_router) 
 app.include_router(agents_router)  # Include the agents router
 app.include_router(sse_router, prefix="/sse", tags=["sse"])  # Add this line
+app.include_router(agent_generator_router, prefix="/agents", tags=["agent"])  # Include the agent generator router
 
 
 # if __name__ == "__main__":

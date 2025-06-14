@@ -112,12 +112,13 @@ def extract_storable_data(state):
                     "post_title": post.get("post_title"),
                     "post_body": post.get("post_body"),
                     "post_url": post.get("post_url"),
-                    "relevance_score": post.get("relevance_score"),
-                    "comment_count": post.get("comment_count"),
-                    "upvote_comment_ratio": post.get("upvote_comment_ratio"),
-                    "upvotes": post.get("upvotes"),
+                    "upvotes": post.get("upvotes", 0),
+                    "comment_count": post.get("comment_count", 0),
                     "created": post.get("created"),
-                    "sort_method": post.get("sort_method")
+                    "keyword_relevance": post.get("keyword_relevance"),
+                    "matched_query": post.get("matched_query"),
+                    "semantic_relevance": post.get("semantic_relevance"),
+                    "combined_relevance": post.get("combined_relevance")
                 }
                 for post in state.get("posts", [])
             ],
@@ -265,7 +266,13 @@ def run_agent(agent_id: int):
                                 post_title=post["post_title"],
                                 post_body=post["post_body"],
                                 post_url=post["post_url"],
-                                relevance_score=post["relevance_score"],
+                                upvotes=post.get("upvotes", 0),
+                                comment_count=post.get("comment_count", 0),
+                                created=datetime.fromisoformat(post["created"]) if post.get("created") else None,
+                                keyword_relevance=post.get("keyword_relevance"),
+                                matched_query=post.get("matched_query"),
+                                semantic_relevance=post.get("semantic_relevance"),
+                                combined_relevance=post.get("combined_relevance")
                             )
                             session.add(reddit_post)
                         

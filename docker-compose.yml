@@ -6,11 +6,15 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
+    volumes:
+      - ./ragent:/app
+      - twitter_cookies:/app/cookies
+      - sentence_transformer_cache:/app/model_cache
     environment:
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - POSTGRES_DSN=${POSTGRES_DSN}
       - SYNC_POSTGRES_DSN=${SYNC_POSTGRES_DSN}
       - REDIS_URL=${REDIS_URL}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
       - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
       - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
@@ -20,17 +24,19 @@ services:
       - TWITTER_EMAIL=${TWITTER_EMAIL}
       - TWITTER_PASSWORD=${TWITTER_PASSWORD}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - EXA_API_KEY=${EXA_API_KEY}
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      qdrant:
+        condition: service_healthy
     networks:
       - market-network
     restart: unless-stopped
-    volumes:
-      - ./ragent:/app
-      - twitter_cookies:/app/cookies
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app"
 
@@ -51,10 +57,15 @@ services:
       - TWITTER_USERNAME=${TWITTER_USERNAME}
       - TWITTER_EMAIL=${TWITTER_EMAIL}
       - TWITTER_PASSWORD=${TWITTER_PASSWORD}
+      - EXA_API_KEY=${EXA_API_KEY}
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      qdrant:
         condition: service_healthy
     networks:
       - market-network
@@ -62,6 +73,7 @@ services:
     volumes:
       - ./ragent:/app
       - twitter_cookies:/app/cookies
+      - sentence_transformer_cache:/app/model_cache
     command: celery -A app.celery_app worker --loglevel=info
 
   celery_beat:
@@ -81,10 +93,15 @@ services:
       - TWITTER_USERNAME=${TWITTER_USERNAME}
       - TWITTER_EMAIL=${TWITTER_EMAIL}
       - TWITTER_PASSWORD=${TWITTER_PASSWORD}
+      - EXA_API_KEY=${EXA_API_KEY}
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      qdrant:
         condition: service_healthy
     networks:
       - market-network
@@ -92,6 +109,7 @@ services:
     volumes:
       - ./ragent:/app
       - twitter_cookies:/app/cookies
+      - sentence_transformer_cache:/app/model_cache
     command: celery -A app.celery_app beat --loglevel=info
 
   flower:
@@ -101,19 +119,32 @@ services:
     ports:
       - "5555:5555"
     environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - POSTGRES_DSN=${POSTGRES_DSN}
+      - SYNC_POSTGRES_DSN=${SYNC_POSTGRES_DSN}
       - REDIS_URL=${REDIS_URL}
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+      - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
+      - REDDIT_USERNAME=${REDDIT_USERNAME}
+      - REDDIT_PASSWORD=${REDDIT_PASSWORD}
       - TWITTER_USERNAME=${TWITTER_USERNAME}
       - TWITTER_EMAIL=${TWITTER_EMAIL}
       - TWITTER_PASSWORD=${TWITTER_PASSWORD}
+      - EXA_API_KEY=${EXA_API_KEY}
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
     depends_on:
       - redis
       - celery_worker
+      - qdrant
     networks:
       - market-network
     restart: unless-stopped
     volumes:
       - ./ragent:/app
       - twitter_cookies:/app/cookies
+      - sentence_transformer_cache:/app/model_cache
     command: celery -A app.celery_app flower --port=5555
 
   postgres:
@@ -144,10 +175,32 @@ services:
       - market-network
     restart: unless-stopped
 
-networks:
-  market-network:
-    driver: bridge
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    environment:
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+    networks:
+      - market-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "timeout", "1", "bash", "-c", ">/dev/tcp/localhost/6333"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 volumes:
   postgres-data:
   twitter_cookies:
+  qdrant-data:
+  sentence_transformer_cache:
+    name: market_agent_sentence_transformer_cache
+
+networks:
+  market-network:
+    driver: bridge

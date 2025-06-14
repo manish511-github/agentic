@@ -245,18 +245,18 @@ async def get_agent_results(
             result_item.results["agent_platform"] = agent.agent_platform
             
             if agent.agent_platform == "reddit":
-                # Get posts from RedditPostModel for this agent
+                # Get posts from RedditPostModel for this agent, sorted by relevance score
                 posts_result = await db.execute(
                     select(models.RedditPostModel)
                     .filter(
                         models.RedditPostModel.agent_name == agent.agent_name,
                         models.RedditPostModel.created_at >= result_item.created_at
                     )
-                    .order_by(models.RedditPostModel.created_at.desc())
+                    .order_by(models.RedditPostModel.combined_relevance.desc())
                 )
                 posts = posts_result.scalars().all()
                 
-                # Add posts to the results
+                # Add sorted posts to the results
                 if posts:
                     result_item.results["posts"] = [
                         {
@@ -265,8 +265,10 @@ async def get_agent_results(
                             "post_title": post.post_title,
                             "post_body": post.post_body,
                             "post_url": post.post_url,
-                            "relevance_score": post.relevance_score,
-                            "sentiment_score": post.sentiment_score,
+                            "keyword_relevance": post.keyword_relevance,
+                            "matched_query": post.matched_query,
+                            "semantic_relevance": post.semantic_relevance,
+                            "combined_relevance": post.combined_relevance,
                             "comment_draft": post.comment_draft,
                             "status": post.status,
                             "created_at": post.created_at.isoformat()
