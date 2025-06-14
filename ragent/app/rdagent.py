@@ -92,6 +92,7 @@ class AgentState(TypedDict):
     retries: int
     error: Optional[str]
     db: Optional[AsyncSession]  # Added to store db session
+    llm: Optional[ChatGoogleGenerativeAI]  # Added to store LLM instance
 
 
 class RedditPost(BaseModel):
@@ -674,21 +675,187 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
 
     return state
 
-def create_graph():
+async def search_posts_directly_node(state: AgentState) -> AgentState:
+    """Search Reddit posts directly using the Reddit API search functionality."""
+    if state.get("error"):
+        return state
+
+    try:
+        # Get Reddit client
+        reddit = await get_reddit_client()
+        
+        # Initialize LLM if not already in state
+            
+        llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-lite", google_api_key=GOOGLE_API_KEY)
+        
+        # Prepare company data for query generation
+        company_data = {
+            "agent_name": state.get("agent_name", ""),
+            "goals": state.get("goals", []),
+            "instructions": state.get("instructions", ""),
+            "company_keywords": state.get("company_keywords", []),
+            "description": state.get("description", ""),
+            "target_audience": state.get("target_audience", ""),
+            "expectation": state.get("expectation", "")
+        }
+
+        # Generate search queries using Gemini
+        prompt = f"""Based on the following company information, generate a comprehensive list of search queries for finding relevant Reddit discussions. 
+        Focus on generating queries that will help find posts about our product, target audience, and industry.
+        Keep each query under 50 characters and make them specific and relevant.
+
+        Company Information:
+        - Name: {company_data['agent_name']}
+        - Goals: {', '.join(company_data['goals'])}
+        - Keywords: {', '.join(company_data['company_keywords'])}
+        - Description: {company_data['description']}
+        - Target Audience: {company_data['target_audience']}
+        - Expected Content: {company_data['expectation']}
+
+        Generate queries in the following categories:
+        1. Core product terms
+        2. Feature-specific terms
+        3. Platform-specific terms
+        4. Use case terms
+        5. Target audience terms
+        6. Industry terms
+
+        OUTPUT REQUIREMENTS:
+        - Must be a valid JSON array of strings
+        - Each string must be a search query
+        - Each query must be under 50 characters
+        - Must use double quotes for strings
+        - Must NOT include backticks, markdown, or any extra text
+
+        IMPORTANT:
+        - NO markdown formatting (no ```json ... ```)
+        - NO text before or after the JSON array
+        - NO explanations or additional text
+
+        YOUR RESPONSE:"""
+
+        # Get Gemini response using safe_gemini_call
+        gemini_response = await safe_gemini_call(llm, prompt)
+        
+        try:
+            # Clean the response by removing markdown formatting
+            cleaned_response = gemini_response.strip()
+            if cleaned_response.startswith("```json"):
+                cleaned_response = cleaned_response[7:]  # Remove ```json
+            if cleaned_response.endswith("```"):
+                cleaned_response = cleaned_response[:-3]  # Remove ```
+            cleaned_response = cleaned_response.strip()
+            
+            # Parse the cleaned response as JSON
+            search_queries = json.loads(cleaned_response)
+            if not isinstance(search_queries, list):
+                raise ValueError("Invalid response format")
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error("Failed to parse Gemini response", 
+                        error=str(e),
+                        response=gemini_response)
+            # Fallback to basic queries if parsing fails
+            search_queries = company_data['company_keywords']
+        
+        # Remove duplicates and ensure queries are short enough
+        search_queries = list(set(search_queries))
+        search_queries = [q for q in search_queries if len(q) <= 100]  # Keep queries short
+        
+        logger.info("Generated search queries using Gemini", 
+                   agent_name=state["agent_name"],
+                   queries=search_queries)
+
+        # Search across all of Reddit
+        posts = []
+        seen_post_ids = set()  # Track unique posts
+        
+        async with reddit as reddit_client:
+            all_subreddit = await reddit_client.subreddit("all")
+            
+            # Try each search query
+            for query in search_queries:
+                try:
+                    async for submission in all_subreddit.search(
+                        query=query,
+                        sort="relevance",
+                        time_filter="month",
+                        limit=100  # Get fewer posts per query but try more queries
+                    ):
+                        # Skip if we've seen this post
+                        if submission.id in seen_post_ids:
+                            continue
+                            
+                        seen_post_ids.add(submission.id)
+                        
+                        # Calculate relevance score based on content
+                        content = (submission.title + " " + submission.selftext).lower()
+                        keyword_matches = sum(1 for kw in state["company_keywords"] if kw.lower() in content)
+                        relevance_score = min(1.0, keyword_matches / max(1, len(state["company_keywords"])))
+                        
+                        post_data = {
+                            "subreddit": submission.subreddit.display_name,
+                            "post_id": submission.id,
+                            "post_title": submission.title,
+                            "post_body": submission.selftext,
+                            "post_url": f"https://www.reddit.com{submission.permalink}",
+                            "upvotes": submission.score,
+                            "comment_count": submission.num_comments,
+                            "created": datetime.utcfromtimestamp(submission.created_utc).isoformat(),
+                            "relevance_score": relevance_score,
+                            "matched_query": query
+                        }
+                        posts.append(post_data)
+                        
+                        # Break if we have enough posts
+                        if len(posts) >= 300:
+                            break
+                            
+                except Exception as e:
+                    logger.warning(f"Search failed for query: {query}", error=str(e))
+                    continue
+                
+                if len(posts) >= 300:
+                    break
+                    
+                # Small delay between queries to avoid rate limits
+                await asyncio.sleep(1)
+
+        # Sort posts by relevance score and upvotes
+        posts.sort(key=lambda x: (x["relevance_score"], x["upvotes"]), reverse=True)
+        
+        # Take top 50 most relevant posts
+        state["posts"] = posts
+        
+        logger.info("Direct post search completed", 
+                   agent_name=state["agent_name"],
+                   posts_found=state["posts"],
+                   unique_queries_used=search_queries)
+
+    except Exception as e:
+        state["error"] = f"Direct post search failed: {str(e)}"
+        logger.error("Direct post search failed", error=str(e))
+
+    return state
+
+def create_reddit_graph() -> StateGraph:
     graph = StateGraph(AgentState)
-
-    graph.add_node("validate_input", validate_input_node)
-    graph.add_node("search_subreddits", search_subreddits_node)
-    graph.add_node("fetch_posts", fetch_posts_node)
-
-    graph.set_entry_point("validate_input")
     
-    graph.add_edge("validate_input", "search_subreddits")
-    graph.add_edge("search_subreddits", "fetch_posts")
-    graph.add_edge("fetch_posts", END)
+    # Add nodes
+    graph.add_node("validate_input", validate_input_node)
+    graph.add_node("search_posts_directly", search_posts_directly_node)
+    
+    # Set entry point
+    graph.set_entry_point("validate_input")
+
+    # graph.set_entry_point("search_posts_directly")
+    
+    # Add edges for direct search path
+    graph.add_edge("validate_input", "search_posts_directly")
+    graph.add_edge("search_posts_directly", END)
+    
     return graph.compile()
 
-reddit_graph = create_graph()
+reddit_graph = create_reddit_graph()
 
 @router.post("/reddit/reddit-agent", dependencies=[Depends(RateLimiter(times=5, seconds=60))])
 async def run_reddit_agent(input: RedditAgentInput, db: AsyncSession = Depends(get_db)):
@@ -708,11 +875,12 @@ async def run_reddit_agent(input: RedditAgentInput, db: AsyncSession = Depends(g
             posts=[],
             retries=0,
             error=None,
-            db=db  # Pass db session to state
+            db=db,  # Pass db session to state
+            llm=None  # Initialize llm as None
         )
         
         result = await reddit_graph.ainvoke(initial_state)
-        
+        return result
         
 
     except Exception as e:
