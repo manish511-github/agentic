@@ -117,5 +117,18 @@ rpdb==0.1.6
 
 # Twitter integration
 twikit==2.3.3
-#Google
+
+# Search APIs
+exa-py==1.14.6  # Exa API client
+tavily-python==0.3.1  # Tavily API client
+
+# Vector Database and Embeddings
+qdrant-client==1.7.0  # Vector database client
+# Commented out SentenceTransformer dependencies
+# sentence-transformers==2.2.2  # For generating text embeddings
+# torch>=2.0.0  # Required by sentence-transformers
+#numpy>=1.24.0  # Required for vector operations
+
+# huggingface-hub==0.16.4
+# Google
 google-genai==1.20
