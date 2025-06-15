@@ -28,16 +28,11 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 # Global configuration
 # ---------------------------------------------------------------------------
 
-# GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-# REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
-# REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
-# REDDIT_USER_AGENT: str = os.getenv(
-#     "REDDIT_USER_AGENT", "agentic-rdagent2/0.1 (by u/aniketsaurav18)")
-
-GOOGLE_API_KEY = "AIzaSyD_mkGCPQJz4w7-EucbQqA5w_sWmjZ7BRY"
-REDDIT_CLIENT_ID = "VgpodAT_c5jlIKgACxlR2Q"
-REDDIT_CLIENT_SECRET = "lVOZjfkEPMgVfyyn14z3hsktfZpePg"
-REDDIT_USER_AGENT = "web:reddit-ai-agent:v0.0.1 (by u/aniketsaurav18)"
+GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
+REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
+REDDIT_USER_AGENT: str = os.getenv(
+    "REDDIT_USER_AGENT", "agentic-rdagent2/0.1")
 
 
 # DEBUG MODE toggles log-level and additional payload printing
