@@ -1,11 +1,14 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, model_validator
 from typing import List, Dict, Optional
 from datetime import datetime
+import enum
+
 
 class UserCreate(BaseModel):
     username: str
     email: str
     password: str
+
 
 class User(BaseModel):
     id: int
@@ -15,12 +18,15 @@ class User(BaseModel):
     class Config:
         orm_mode = True
 
+
 class Token(BaseModel):
     access_token: str
     token_type: str
 
+
 class TokenData(BaseModel):
     username: str | None = None
+
 
 class ProjectBase(BaseModel):
     title: str
@@ -37,8 +43,10 @@ class ProjectBase(BaseModel):
     keywords: Optional[List[str]] = None
     excluded_keywords: Optional[List[str]] = None
 
+
 class ProjectCreate(ProjectBase):
     pass
+
 
 class Project(ProjectBase):
     id: int
@@ -49,6 +57,7 @@ class Project(ProjectBase):
     class Config:
         orm_mode = True
 
+
 class RedditSettings(BaseModel):
     subreddit: str
     timeRange: str  # day, week, month, year, all
@@ -58,6 +67,7 @@ class RedditSettings(BaseModel):
     excluded_keywords: Optional[List[str]] = None
     target_subreddits: Optional[List[str]] = None
 
+
 class TwitterSettings(BaseModel):
     target_accounts: List[str]
     timeRange: str  # day, week, month
@@ -65,6 +75,7 @@ class TwitterSettings(BaseModel):
     sentiment_filter: Optional[str] = None  # positive, negative, neutral
     excluded_keywords: Optional[List[str]] = None
     hashtags: Optional[List[str]] = None
+
 
 class LinkedInSettings(BaseModel):
     target_companies: List[str]
@@ -74,10 +85,12 @@ class LinkedInSettings(BaseModel):
     excluded_keywords: Optional[List[str]] = None
     job_titles: Optional[List[str]] = None
 
+
 class PlatformSettings(BaseModel):
     reddit: Optional[RedditSettings] = None
     twitter: Optional[TwitterSettings] = None
     linkedin: Optional[LinkedInSettings] = None
+
 
 class AgentBase(BaseModel):
     agent_name: str
@@ -92,8 +105,6 @@ class AgentBase(BaseModel):
     advanced_settings: Dict = {}
     platform_settings: PlatformSettings
 
-class AgentCreate(AgentBase):
-    project_id: str
 
 class Agent(AgentBase):
     id: int
@@ -102,6 +113,7 @@ class Agent(AgentBase):
 
     class Config:
         orm_mode = True
+
 
 class RedditPost(BaseModel):
     subreddit: str
@@ -117,6 +129,57 @@ class RedditPost(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+class ScheduleTypeEnum(str, enum.Enum):
+    daily = "daily"
+    weekly = "weekly"
+    monthly = "monthly"
+
+
+class DaysOfWeekEnum(str, enum.Enum):
+    monday = "monday"
+    tuesday = "tuesday"
+    wednesday = "wednesday"
+    thursday = "thursday"
+    friday = "friday"
+    saturday = "saturday"
+
+
+class ScheduleBase(BaseModel):
+    schedule_type: ScheduleTypeEnum
+    schedule_time: Optional[datetime] = None
+    days_of_week: Optional[List[DaysOfWeekEnum]] = None
+    day_of_month: Optional[int] = None
+
+    @model_validator(mode="after")
+    def validate_schedule(self):
+        if self.schedule_type == "weekly" and not self.days_of_week:
+            raise ValueError("days_of_week is required for weekly schedule")
+        if self.schedule_type == "monthly" and self.day_of_month is None:
+            raise ValueError("day_of_month is required for monthly schedule")
+        return self
+
+
+class AgentRequestSchema(BaseModel):
+    agent_platform: str
+    agent_name: str
+    goals: List[str]
+    instructions: str
+    description: Optional[str] = None
+
+
+class RedditAgentRequestSchema(AgentRequestSchema):
+    agent_platform: str = "reddit"
+    company_keywords: List[str]
+    expectation: Optional[str] = None
+    target_audience: Optional[str] = None
+    min_upvotes: Optional[int] = 0
+    max_age_days: Optional[int] = 7
+    target_subreddits: Optional[List[str]] = None
+    copilot: Optional[bool] = False
+    schedule: ScheduleBase
+
 
 class AgentResult(BaseModel):
     id: int
