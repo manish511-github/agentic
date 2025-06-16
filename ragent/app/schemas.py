@@ -58,63 +58,6 @@ class Project(ProjectBase):
         orm_mode = True
 
 
-class RedditSettings(BaseModel):
-    subreddit: str
-    timeRange: str  # day, week, month, year, all
-    relevanceThreshold: int
-    monitorComments: bool
-    minUpvotes: int
-    excluded_keywords: Optional[List[str]] = None
-    target_subreddits: Optional[List[str]] = None
-
-
-class TwitterSettings(BaseModel):
-    target_accounts: List[str]
-    timeRange: str  # day, week, month
-    relevanceThreshold: int
-    sentiment_filter: Optional[str] = None  # positive, negative, neutral
-    excluded_keywords: Optional[List[str]] = None
-    hashtags: Optional[List[str]] = None
-
-
-class LinkedInSettings(BaseModel):
-    target_companies: List[str]
-    timeRange: str  # day, week, month
-    relevanceThreshold: int
-    industry_filter: Optional[List[str]] = None
-    excluded_keywords: Optional[List[str]] = None
-    job_titles: Optional[List[str]] = None
-
-
-class PlatformSettings(BaseModel):
-    reddit: Optional[RedditSettings] = None
-    twitter: Optional[TwitterSettings] = None
-    linkedin: Optional[LinkedInSettings] = None
-
-
-class AgentBase(BaseModel):
-    agent_name: str
-    agent_platform: str
-    agent_status: str = "active"
-    goals: str
-    instructions: str
-    expectations: str
-    mode: str = "copilot"
-    review_period: str
-    review_minutes: int = 0
-    advanced_settings: Dict = {}
-    platform_settings: PlatformSettings
-
-
-class Agent(AgentBase):
-    id: int
-    project_id: int
-    created_at: datetime
-
-    class Config:
-        orm_mode = True
-
-
 class RedditPost(BaseModel):
     subreddit: str
     post_id: str
@@ -161,23 +104,67 @@ class ScheduleBase(BaseModel):
         return self
 
 
-class AgentRequestSchema(BaseModel):
-    agent_platform: str
+class RedditSettings(BaseModel):
+    subreddits: Optional[List[str]] = None
+    timeRange: Optional[str] = None  # day, week, month, year, all
+    relevanceThreshold: Optional[int] = None
+    monitorComments: Optional[bool] = False
+    minUpvotes: Optional[int] = None
+    excluded_keywords: Optional[List[str]] = None
+
+
+class TwitterSettings(BaseModel):
+    target_accounts: Optional[List[str]] = None
+    timeRange: Optional[str] = None  # day, week, month
+    relevanceThreshold: Optional[int] = None
+    sentiment_filter: Optional[str] = None  # positive, negative, neutral
+    excluded_keywords: Optional[List[str]] = None
+    hashtags: Optional[List[str]] = None
+
+
+class LinkedInSettings(BaseModel):
+    target_companies: Optional[List[str]] = None
+    timeRange: Optional[str] = None  # day, week, month
+    relevanceThreshold: Optional[int] = None
+    industry_filter: Optional[List[str]] = None
+    excluded_keywords: Optional[List[str]] = None
+    job_titles: Optional[List[str]] = None
+
+
+class PlatformSettings(BaseModel):
+    reddit: Optional[RedditSettings] = None
+    twitter: Optional[TwitterSettings] = None
+    linkedin: Optional[LinkedInSettings] = None
+
+
+class AgentPlatformEnum(str, enum.Enum):
+    reddit = "reddit"
+    twitter = "twitter"
+    linkedin = "linkedin"
+
+
+class AgentModeEnum(str, enum.Enum):
+    copilot = "copilot"
+    autonomous = "autonomous"
+
+
+class AgentBaseSchema(BaseModel):
     agent_name: str
-    goals: List[str]
-    instructions: str
     description: Optional[str] = None
+    agent_platform: AgentPlatformEnum
+    agent_status: str = "active"
+    goals: str
+    instructions: str
+    expectations: str
+    keywords: List[str]
+    mode: AgentModeEnum
+    review_minutes: int
+    advanced_settings: Dict = {}
 
 
-class RedditAgentRequestSchema(AgentRequestSchema):
-    agent_platform: str = "reddit"
-    company_keywords: List[str]
-    expectation: Optional[str] = None
-    target_audience: Optional[str] = None
-    min_upvotes: Optional[int] = 0
-    max_age_days: Optional[int] = 7
-    target_subreddits: Optional[List[str]] = None
-    copilot: Optional[bool] = False
+class RedditAgentRequestSchema(AgentBaseSchema):
+    agent_platform: AgentPlatformEnum = "reddit"
+    platform_settings: RedditSettings
     schedule: ScheduleBase
 
 

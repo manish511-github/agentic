@@ -63,37 +63,22 @@ async def create_agent(
 
     # Create new agent with actual project ID
     agent_data = agent_data.model_dump()
-    agent_data["project_id"] = project.id
-    db_agent = models.AgentModel(**agent_data)
+    db_agent = models.AgentModel(
+        agent_name=agent_data["agent_name"],
+        agent_platform=agent_data["agent_platform"],
+        agent_status=agent_data["agent_status"],
+        goals=agent_data["goals"],
+        instructions=agent_data["instructions"],
+        project_id=project.id,
+        mode=agent_data["mode"],
+        review_minutes=agent_data["review_minutes"],
+        advanced_settings=agent_data["advanced_settings"],
+        platform_settings=agent_data["platform_settings"]
+    )
+    print(db_agent)
     db.add(db_agent)
     await db.commit()
     await db.refresh(db_agent)
-
-    # Trigger Celery task for the new agent
-    try:
-        # Schedule the task to run
-        run_agent.delay(db_agent.id)
-
-        # Update agent status to indicate task is scheduled
-        db_agent.agent_status = "scheduled"
-        db_agent.last_run = datetime.utcnow()
-        await db.commit()
-        await db.refresh(db_agent)
-
-        # Send WebSocket notification
-        await manager.broadcast_to_project(
-            project.id,
-            {
-                "type": "agent_created",
-                "agent_id": db_agent.id,
-                "status": "scheduled",
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        )
-    except Exception as e:
-        # Log the error but don't fail the agent creation
-        print(f"Error scheduling agent task: {str(e)}")
-
     return db_agent
 
 

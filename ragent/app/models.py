@@ -121,6 +121,7 @@ class AgentModel(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     agent_name = Column(String, nullable=False)
+    description = Column(String)
     # reddit, twitter, linkedin
     agent_platform = Column(String, nullable=False)
     agent_status = Column(String, default="active")
@@ -130,10 +131,10 @@ class AgentModel(Base):
     keywords = Column(ARRAY(String))
     project_id = Column(Integer, ForeignKey("projects.id"))
     mode = Column(String, default="copilot")  # copilot, autonomous
-    review_period = Column(String)  # daily, weekly, monthly
-    review_minutes = Column(Integer, default=0)
-    advanced_settings = Column(JSON, default={})
-    platform_settings = Column(JSON)  # Platform-specific settings
+    review_minutes = Column(Integer, nullable=True)
+    advanced_settings = Column(JSON, nullable=True)
+    # Platform-specific settings
+    platform_settings = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_run = Column(DateTime(timezone=True),
                       nullable=True)  # Track last run time

@@ -7,14 +7,14 @@ from dotenv import load_dotenv
 from app.agent import router as agent_router
 from app.rdagent import router as rdagent_router
 from app.xagent import router as xdagent_router
-from app.auth import router as auth_router 
-from app.api.projects import router as projects_router 
+from app.auth import router as auth_router
+from app.api.projects import router as projects_router
 from app.api.agents import router as agents_router  # Import the agents router
 from app.sse import router as sse_router  # Add this import
 from app.database import init_db
 
 import math
-from fastapi.middleware.cors import CORSMiddleware # Import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware  # Import CORSMiddleware
 
 # Initialize logging
 structlog.configure(
@@ -36,13 +36,16 @@ app = FastAPI(title="Advanced Website Scraper and Reddit Marketing Agent API")
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000","https://rdagent-frontend.vercel.app"],  # Your frontend URL
+    allow_origins=["http://localhost:3000",
+                   "https://rdagent-frontend.vercel.app"],  # Your frontend URL
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
 
 # Initialize rate limiter
+
+
 @app.on_event("startup")
 async def startup_event():
     redis_client = redis.from_url(REDIS_URL)
@@ -54,8 +57,9 @@ async def startup_event():
 app.include_router(agent_router)
 app.include_router(rdagent_router)
 app.include_router(xdagent_router)
-app.include_router(auth_router, prefix="/auth", tags=["auth"]) # Include the auth router
-app.include_router(projects_router) 
+app.include_router(auth_router, prefix="/auth",
+                   tags=["auth"])  # Include the auth router
+app.include_router(projects_router)
 app.include_router(agents_router)  # Include the agents router
 app.include_router(sse_router, prefix="/sse", tags=["sse"])  # Add this line
 
