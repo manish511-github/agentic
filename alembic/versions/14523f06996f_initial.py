@@ -1,8 +1,8 @@
 """initial
 
-Revision ID: 000bab3f74ae
+Revision ID: 14523f06996f
 Revises: 
-Create Date: 2025-06-16 22:06:40.457131
+Create Date: 2025-06-16 23:37:39.805421
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '000bab3f74ae'
+revision: str = '14523f06996f'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -30,9 +30,10 @@ def upgrade() -> None:
     sa.Column('created_utc', sa.DateTime(), nullable=True),
     sa.Column('upvotes', sa.Integer(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('post_id')
     )
-    op.create_index('idx_post_id', 'reddit_posts', ['post_id'], unique=False)
+    op.create_index('idx_post_id', 'reddit_posts', ['post_id'], unique=True)
     op.create_index(op.f('ix_reddit_posts_id'), 'reddit_posts', ['id'], unique=False)
     op.create_table('twitter_posts',
     sa.Column('id', sa.Integer(), nullable=False),
@@ -171,7 +172,7 @@ def upgrade() -> None:
     sa.Column('status', sa.String(), nullable=True),
     sa.ForeignKeyConstraint(['agent_id'], ['agents.id'], ),
     sa.ForeignKeyConstraint(['execution_id'], ['executions.id'], ),
-    sa.ForeignKeyConstraint(['post_id'], ['reddit_posts.id'], ),
+    sa.ForeignKeyConstraint(['post_id'], ['reddit_posts.post_id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index('idx_execution_agent', 'reddit_agent_execution_mapper', ['execution_id', 'agent_id'], unique=False)

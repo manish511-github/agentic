@@ -81,7 +81,7 @@ class RedditPostModel(Base):
     __tablename__ = "reddit_posts"
     id = Column(Integer, primary_key=True, index=True)
     subreddit = Column(String)
-    post_id = Column(String)
+    post_id = Column(String, unique=True)
     post_title = Column(String)
     post_body = Column(String)
     post_url = Column(String)
@@ -90,7 +90,7 @@ class RedditPostModel(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # create an index on post_id
-    __table_args__ = (Index('idx_post_id', "post_id"),)
+    __table_args__ = (Index('idx_post_id', "post_id", unique=True),)
 
 
 class TwitterPostModel(Base):
@@ -210,7 +210,7 @@ class RedditAgentExecutionMapperModel(Base):
     execution_id = Column(Integer, ForeignKey("executions.id"))
     agent_id = Column(Integer, ForeignKey("agents.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    post_id = Column(String, ForeignKey("reddit_posts.id"))
+    post_id = Column(String, ForeignKey("reddit_posts.post_id"))
     relevance_score = Column(Float)
     comment_draft = Column(String)
     status = Column(String, nullable=True)
