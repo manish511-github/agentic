@@ -1,0 +1,51 @@
+services:
+  - type: web
+    name: ragent-web
+    env: python
+    buildCommand: |
+      pip install -r ragent/requirements.txt
+      cd ragent
+      alembic upgrade head
+    startCommand: cd ragent && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ragent-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: ragent-redis
+          property: connectionString
+      - key: ENVIRONMENT
+        value: production
+  - type: worker
+    name: ragent-worker
+    env: python
+    buildCommand: |
+      pip install -r ragent/requirements.txt
+    startCommand: cd ragent && celery -A app.celery_app worker --loglevel=info
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ragent-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: ragent-redis
+          property: connectionString
+      - key: ENVIRONMENT
+        value: production
+  - type: redis
+    name: ragent-redis
+    ipAllowList: []
+
+databases:
+  - name: ragent-db
+    databaseName: ragent
+    user: ragent 
