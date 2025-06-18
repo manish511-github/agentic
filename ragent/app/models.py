@@ -30,12 +30,16 @@ class RedditPostModel(Base):
     post_title = Column(String)
     post_body = Column(String)
     post_url = Column(String)
-    relevance_score = Column(Float)
-    sentiment_score = Column(Float)
     comment_draft = Column(String)
     status = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-
+    upvotes = Column(Integer, default=0)
+    comment_count = Column(Integer, default=0)
+    created = Column(DateTime(timezone=True))
+    keyword_relevance = Column(Float)
+    matched_query = Column(String)
+    semantic_relevance = Column(Float)
+    combined_relevance = Column(Float)
 
 class ProjectModel(Base):
     __tablename__ = "projects"
