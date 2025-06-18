@@ -117,3 +117,5 @@ rpdb==0.1.6
 
 # Twitter integration
 twikit==2.3.3
+#Google
+google-genai==1.20
