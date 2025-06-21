@@ -5,12 +5,12 @@ wget \
 gnupg \
 unzip \
 curl \
-chromium \
-gcc \
-g++ \
-build-essential \
-software-properties-common \
-git \
+# chromium \
+# gcc \
+# g++ \
+# build-essential \
+# software-properties-common \
+# git \
 && rm -rf /var/lib/apt/lists/*
 
 
