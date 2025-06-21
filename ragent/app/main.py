@@ -13,6 +13,7 @@ from app.api.agents import router as agents_router  # Import the agents router
 from app.sse import router as sse_router  # Add this import
 from app.api.generate_profile import router as agent_generator_router  # Import the agent generator router
 from app.database import init_db
+from app.core.agents_tasks.hn_agent.hnagent import router as hnagent_router
 
 import math
 from fastapi.middleware.cors import CORSMiddleware # Import CORSMiddleware
@@ -60,6 +61,7 @@ app.include_router(projects_router)
 app.include_router(agents_router)  # Include the agents router
 app.include_router(sse_router, prefix="/sse", tags=["sse"])  # Add this line
 app.include_router(agent_generator_router, prefix="/agents", tags=["agent"])  # Include the agent generator router
+app.include_router(hnagent_router, tags=["hackernews"])
 
 
 # if __name__ == "__main__":
