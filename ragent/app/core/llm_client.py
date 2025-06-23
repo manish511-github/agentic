@@ -30,7 +30,7 @@ def get_llm():
     if _llm is None:
         try:
             _llm = ChatGoogleGenerativeAI(
-                model="gemini-1.5-flash",
+                model="gemini-2.0-flash-lite",
                 google_api_key=GOOGLE_API_KEY,
                 temperature=0.7,
                 max_output_tokens=2048

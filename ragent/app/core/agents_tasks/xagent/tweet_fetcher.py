@@ -8,6 +8,10 @@ from .x_agent_config import logger, MIN_WAIT_TIME, MAX_WAIT_TIME
 from .client import get_twitter_client
 from .models import TweetQueryInput
 from .x_agent_config import load_twitter_accounts_from_env
+from app.core.vector_db import get_qdrant_client, get_collection_name, ensure_collection_exists
+from app.core.llm_client import get_embedding_model
+from qdrant_client.http import models
+from fastapi import HTTPException
 
 def extract_hashtags_from_text(text: str) -> List[str]:
     """Extract hashtags from tweet text"""
@@ -34,6 +38,11 @@ async def get_tweets(client, query: str, tweets=None):
         await asyncio.sleep(wait_time)
         return await get_tweets(client, query, tweets)
     except Exception as e:
+        if "429" in str(e) or "rate limit" in str(e).lower():
+            wait_time = 150  # fallback to 10 minutes
+            logger.warning(f"Generic rate limit error. Waiting {wait_time} seconds.", error=str(e))
+            await asyncio.sleep(wait_time)
+            return await get_tweets(client, query, tweets)
         logger.error(f"Error getting tweets: {str(e)}")
         raise
 
@@ -72,6 +81,12 @@ async def fetch_tweets_by_query(input: TweetQueryInput, db, twitter_client=None)
                              wait_seconds=wait_time)
                 await asyncio.sleep(wait_time)
                 continue
+            except Exception as e:
+                if "429" in str(e) or "rate limit" in str(e).lower():
+                    wait_time = 150  # fallback to 10 minutes
+                    logger.warning(f"Generic rate limit error. Waiting {wait_time} seconds.", error=str(e))
+                    await asyncio.sleep(wait_time)
+                    continue
 
             if not tweets:
                 logger.info("No more tweets found")
@@ -106,20 +121,25 @@ async def fetch_tweets_by_query(input: TweetQueryInput, db, twitter_client=None)
         }
 
     except Exception as e:
-        logger.error("Tweet fetch failed", 
-                    error=str(e),
-                    stack_info=True)
-        raise Exception(f"Error fetching tweets: {str(e)}") 
-    
+        if "429" in str(e) or "rate limit" in str(e).lower():
+            logger.warning("Rate limit exceeded. Waiting for a bit before retrying.")
+            await asyncio.sleep(200)  # Wait for 10 minutes before retrying
+            return await fetch_tweets_by_query(input, db, twitter_client=twitter_client)
+        else:
+            logger.error("Tweet fetch failed", 
+                        error=str(e),
+                        stack_info=True)
+            raise Exception(f"Error fetching tweets: {str(e)}") 
 
 async def fetch_tweets_for_hashtag(client, hashtag, db):
     try:
         query_input = TweetQueryInput(
-            query=f"#{hashtag}",
+            query=hashtag if hashtag.startswith('#') else f'#{hashtag}',
             minimum_tweets=10,
             product="Top"
         )
         result = await fetch_tweets_by_query(query_input, db, twitter_client=client)
+        await asyncio.sleep(10)
         return result.get("tweets", [])
     except Exception as e:
         logger.error(f"Error processing hashtag {hashtag}", error=str(e), stack_info=True)
@@ -150,6 +170,7 @@ async def fetch_tweets_node(state: AgentState) -> AgentState:
 
     for batch_start in range(0, len(hashtags), batch_size):
         batch = hashtags[batch_start:batch_start + batch_size]
+        # Concurrently -> if we want to make process parallel
         tasks = []
         for i, hashtag in enumerate(batch):
             client = clients[i]  # Each hashtag in the batch gets a unique client
@@ -157,6 +178,11 @@ async def fetch_tweets_node(state: AgentState) -> AgentState:
         batch_results = await asyncio.gather(*tasks)
         for tweets in batch_results:
             state["tweets"].extend(tweets)
+        # Sequently :
+        # for i, hashtag in enumerate(batch):
+        #     client = clients[i]
+        #     tweets = await fetch_tweets_for_hashtag(client, hashtag, state["db"])
+        #     state["tweets"].extend(tweets)
         await asyncio.sleep(random.randint(MIN_WAIT_TIME, MAX_WAIT_TIME))
 
     logger.info(
