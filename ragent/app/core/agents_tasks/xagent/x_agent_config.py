@@ -15,8 +15,8 @@ TWITTER_EMAIL = os.getenv("TWITTER_EMAIL")
 TWITTER_PASSWORD = os.getenv("TWITTER_PASSWORD")
 
 # Constants for rate limiting
-MIN_WAIT_TIME = 60  # Increased to 60 seconds between requests
-MAX_WAIT_TIME = 120  # Increased to 120 seconds between requests
+MIN_WAIT_TIME = 180  # Increased to 60 seconds between requests
+MAX_WAIT_TIME = 200  # Increased to 120 seconds between requests
 MIN_TWEETS_PER_HASHTAG = 10
 
 # Goal mapping for Twitter agent
