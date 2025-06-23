@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 services:
   ragent:
     build:
@@ -74,7 +74,7 @@ services:
       - ./ragent:/app
       - twitter_cookies:/app/cookies
       - sentence_transformer_cache:/app/model_cache
-    command: celery -A app.celery_app worker --loglevel=info
+    command: celery -A app.celery_app worker -Q default --loglevel=info
 
   celery_beat:
     build:
@@ -164,6 +164,24 @@ services:
       - market-network
     restart: unless-stopped
 
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin_container
+    ports:
+      - "5050:80" # Expose pgAdmin on port 5050
+    environment:
+      PGADMIN_DEFAULT_EMAIL: aniket@agentic.ai
+      PGADMIN_DEFAULT_PASSWORD: aniket@agentic.ai
+      PGADMIN_DISABLE_POSTFIX: false
+      PGADMIN_SERVER_JSON_FILE: /pgadmin4/servers.json
+    volumes:
+      - ./server.json:/pgadmin4/servers.json
+    depends_on:
+      - postgres
+    networks:
+      - market-network
+    restart: unless-stopped
+
   redis:
     image: redis:7
     healthcheck:
@@ -193,6 +211,42 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  scheduler_worker:
+    build:
+      context: ./ragent
+      dockerfile: Dockerfile
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - POSTGRES_DSN=${POSTGRES_DSN}
+      - SYNC_POSTGRES_DSN=${SYNC_POSTGRES_DSN}
+      - REDIS_URL=${REDIS_URL}
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+      - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
+      - REDDIT_USERNAME=${REDDIT_USERNAME}
+      - REDDIT_PASSWORD=${REDDIT_PASSWORD}
+      - TWITTER_USERNAME=${TWITTER_USERNAME}
+      - TWITTER_EMAIL=${TWITTER_EMAIL}
+      - TWITTER_PASSWORD=${TWITTER_PASSWORD}
+      - EXA_API_KEY=${EXA_API_KEY}
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - market-network
+    restart: unless-stopped
+    volumes:
+      - ./ragent:/app
+      - twitter_cookies:/app/cookies
+      - sentence_transformer_cache:/app/model_cache
+    command: celery -A app.celery_app worker -Q scheduler -c 1 --loglevel=info
 
 volumes:
   postgres-data:
