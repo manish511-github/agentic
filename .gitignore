@@ -50,6 +50,7 @@ ragent/app/qwerty.txt
 *.csv
 *.json
 __pycache__/
+celerybeat-schedule
 
 # Python
 __pycache__/
