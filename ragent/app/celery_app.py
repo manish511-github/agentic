@@ -12,6 +12,7 @@ celery_app = Celery(
     include=[
         "app.tasks",
         "app.services.schedular.schedular",
+        "app.services.executors.executor",
     ],
 )
 
