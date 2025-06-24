@@ -358,7 +358,7 @@ async def search_subreddits_node(state: AgentState) -> AgentState:
             
             # Phase 4: Chunked LLM Processing
             llm = ChatGoogleGenerativeAI(
-                model="gemini-1.5-flash",
+                model="gemini-2.0-flash-lite",
                 google_api_key=GOOGLE_API_KEY,
                 max_retries=2,
                 timeout=30
@@ -507,7 +507,7 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
             raise ValueError("GOOGLE_API_KEY environment variable not set")
         
         llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
+            model="gemini-2.0-flash-lite",
             google_api_key=os.getenv("GOOGLE_API_KEY"),
             max_retries=1,
             temperature=0.2
