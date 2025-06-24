@@ -54,72 +54,75 @@ async def search_posts_directly_node(state: AgentState) -> AgentState:
             "company_keywords": state.get("company_keywords", []),
             "description": state.get("description", ""),
             "target_audience": state.get("target_audience", ""),
-            "expectation": state.get("expectation", "")
+            "expectation": state.get("expectation", ""),
+            "keywords": state.get("keywords","")
         }
+        search_queries=company_data["keywords"]
         
-        prompt = f"""Based on the following company information, generate a comprehensive list of search queries for finding relevant Reddit discussions. 
-        Focus on generating queries that will help find posts about our product, its broader category, target audience, and industry.
-        Keep each query under 50 characters and make them specific and relevant.
+        # prompt = f"""Based on the following company information, generate a comprehensive list of search queries for finding relevant Reddit discussions. 
+        # Focus on generating queries that will help find posts about our product, its broader category, target audience, and industry.
+        # Keep each query under 50 characters and make them specific and relevant.
 
-        Company Information:
-        - Name: {company_data['agent_name']}
-        - Goals: {', '.join(company_data['goals'])}
-        - Keywords: {', '.join(company_data['company_keywords'])}
-        - Description: {company_data['description']}
-        - Target Audience: {company_data['target_audience']}
-        - Expected Content: {company_data['expectation']}
+        # Company Information:
+        # - Name: {company_data['agent_name']}
+        # - Goals: {', '.join(company_data['goals'])}
+        # - Keywords: {', '.join(company_data['company_keywords'])}
+        # - Description: {company_data['description']}
+        # - Target Audience: {company_data['target_audience']}
+        # - Expected Content: {company_data['expectation']}
 
-        Generate queries in the following categories:
-        1. Core product terms (specific to our product)
-        2. Product category terms (broader category our product belongs to)
-        3. Feature-specific terms (both our product and similar products)
-        4. Platform-specific terms
-        5. Use case terms (both specific and general use cases)
-        6. Target audience terms (including broader audience segments)
-        7. Industry terms (both specific and general industry discussions)
-        8. Alternative solutions (competitors and similar products)
-        9. Problem space terms (common issues our product solves)
-        10. Market trends and discussions
+        # Generate queries in the following categories:
+        # 1. Core product terms (specific to our product)
+        # 2. Product category terms (broader category our product belongs to)
+        # 3. Feature-specific terms (both our product and similar products)
+        # 4. Platform-specific terms
+        # 5. Use case terms (both specific and general use cases)
+        # 6. Target audience terms (including broader audience segments)
+        # 7. Industry terms (both specific and general industry discussions)
+        # 8. Alternative solutions (competitors and similar products)
+        # 9. Problem space terms (common issues our product solves)
+        # 10. Market trends and discussions
 
-        For each category, include:
-        - Specific queries about our product
-        - Broader queries about the product category
-        - Related industry discussions
-        - Common pain points and solutions
-        - Market trends and developments
+        # For each category, include:
+        # - Specific queries about our product
+        # - Broader queries about the product category
+        # - Related industry discussions
+        # - Common pain points and solutions
+        # - Market trends and developments
 
-        OUTPUT REQUIREMENTS:
-        - Must be a valid JSON array of strings
-        - Each string must be a search query
-        - Each query must be under 50 characters
-        - Must use double quotes for strings
-        - Must NOT include backticks, markdown, or any extra text
+        # OUTPUT REQUIREMENTS:
+        # - Must be a valid JSON array of strings
+        # - Each string must be a search query
+        # - Each query must be under 50 characters
+        # - Must use double quotes for strings
+        # - Must NOT include backticks, markdown, or any extra text
 
-        IMPORTANT:
-        - NO markdown formatting (no ```json ... ```)
-        - NO text before or after the JSON array
-        - NO explanations or additional text
+        # IMPORTANT:
+        # - NO markdown formatting (no ```json ... ```)
+        # - NO text before or after the JSON array
+        # - NO explanations or additional text
 
-        YOUR RESPONSE:"""
+        # YOUR RESPONSE:"""
 
-        gemini_response = await safe_gemini_call(llm, prompt)
-        try:
-            cleaned_response = gemini_response.strip()
-            if cleaned_response.startswith("```json"):
-                cleaned_response = cleaned_response[7:]
-            if cleaned_response.endswith("```"):
-                cleaned_response = cleaned_response[:-3]
-            cleaned_response = cleaned_response.strip()
-            search_queries = json.loads(cleaned_response)
-            if not isinstance(search_queries, list):
-                raise ValueError("Invalid response format")
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.error("Failed to parse Gemini response", error=str(e), response=gemini_response)
-            search_queries = company_data['company_keywords']
-        search_queries = list(set(search_queries + company_data['company_keywords']))
-        search_queries = [q for q in search_queries if len(q) <= 50]
-        state["keywords"] = search_queries
-        logger.info("Generated search queries using Gemini", agent_name=state["agent_name"], queries=search_queries)
+        # gemini_response = await safe_gemini_call(llm, prompt)
+        # try:
+        #     cleaned_response = gemini_response.strip()
+        #     if cleaned_response.startswith("```json"):
+        #         cleaned_response = cleaned_response[7:]
+        #     if cleaned_response.endswith("```"):
+        #         cleaned_response = cleaned_response[:-3]
+        #     cleaned_response = cleaned_response.strip()
+        #     search_queries = json.loads(cleaned_response)
+        #     if not isinstance(search_queries, list):
+        #         raise ValueError("Invalid response format")
+        # except (json.JSONDecodeError, ValueError) as e:
+        #     logger.error("Failed to parse Gemini response", error=str(e), response=gemini_response)
+            # search_queries = company_data['company_keywords']
+
+        # search_queries = list(set(search_queries + company_data['company_keywords']))
+        # search_queries = [q for q in search_queries if len(q) <= 50]
+        # state["keywords"] = search_queries
+        # logger.info("Generated search queries using Gemini", agent_name=state["agent_name"], queries=search_queries)
         BATCH_SIZE = 50
         EMBEDDING_BATCH_SIZE = 10
         current_batch = []
