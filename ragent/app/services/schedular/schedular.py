@@ -15,11 +15,6 @@ which is executed every minute by Celery Beat.  The logic works as follows:
    c. Mark the *current* execution as "running" (effectively *queued*).
 3. Commit the transaction and continue.
 
-NOTE
-----
-The existing ``ExecutionStatusEnum`` does not contain a ``queued`` value.  To
-avoid schema changes the status is updated to ``running`` once the execution
-has been queued.
 """
 
 import os
@@ -128,7 +123,7 @@ def _compute_next_execution_time(
 # ---------------------------------------------------------------------------
 
 @celery_app.task(name="app.schedular.schedular.execute_agent_run")
-def execute_agent_run(execution_id: int) -> None:  # pragma: no cover
+def execute_agent_run(execution_id: int, agent_id: int) -> None:  # pragma: no cover
     """Worker task that triggers processing of *execution_id* via ``run_agent``.
 
     The heavy-lifting is delegated to the already existing ``run_agent`` task
@@ -142,7 +137,7 @@ def execute_agent_run(execution_id: int) -> None:  # pragma: no cover
                 return  # Nothing to process
 
             # Delegate to existing agent task
-            run_agent.delay(execution.agent_id)
+            run_agent.delay(agent_id)
     except Exception as exc:  # pragma: no cover
         # Celery will log the exception, re-raise for visibility
         raise exc
@@ -177,9 +172,9 @@ def process_scheduled_executions(lookahead_minutes: int | None = None) -> None: 
         )
 
         for execution in pending_executions:
-            if execution.schedule is None:        # shouldn't happen now
+            if execution.schedule is None:
                 logger.warning(
-                    "Orphan execution %s – no schedule, skipping", execution.id)
+                    "Orphan execution %s - no schedule, skipping", execution.id)
                 continue
             # 2.a Compute and persist the *next* execution for this schedule
             next_time = _compute_next_execution_time(
@@ -194,11 +189,11 @@ def process_scheduled_executions(lookahead_minutes: int | None = None) -> None: 
 
             # 2.b Queue current execution for processing
             celery_app.send_task(
-                "app.schedular.schedular.execute_agent_run", args=[execution.id]
+                "app.schedular.schedular.execute_agent_run", args=[execution.id, execution.agent_id]
             )
 
-            # 2.c Mark current execution as *running* (i.e. queued)
-            execution.status = ExecutionStatusEnum.running
+            # 2.c Mark current execution as *queued*
+            execution.status = ExecutionStatusEnum.queued
 
         # Persist all changes in one go for efficiency
         session.commit()
