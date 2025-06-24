@@ -5,7 +5,7 @@ import structlog
 import os
 from dotenv import load_dotenv
 from app.agent import router as agent_router
-from app.rdagent import router as rdagent_router
+from app.core.agents_tasks.rdagent.rd_agent_advanced.router import router as rdagent_router
 from app.auth import router as auth_router 
 from app.api.projects import router as projects_router 
 from app.api.agents import router as agents_router  # Import the agents router
