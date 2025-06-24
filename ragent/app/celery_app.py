@@ -1,5 +1,6 @@
 from celery import Celery
 import os
+from kombu import Queue  # NEW IMPORT FOR QUEUE DEFINITION
 
 # Get Redis URL from environment variable
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -8,7 +9,11 @@ celery_app = Celery(
     "ragent",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=["app.tasks"]
+    include=[
+        "app.tasks",
+        "app.services.schedular.schedular",
+        "app.services.executors.executor",
+    ],
 )
 
 # Optional configuration
@@ -26,10 +31,29 @@ celery_app.conf.update(
     worker_max_memory_per_child=200000  # Restart worker after using 200MB memory
 )
 
+# -------------------------------------------------------------
+# Queues and routing configuration
+# -------------------------------------------------------------
+celery_app.conf.task_queues = (
+    Queue("default"),
+    Queue("scheduler"),
+)
+
+celery_app.conf.task_routes = {
+    # All tasks defined in the scheduler module go to the dedicated queue
+    "app.schedular.schedular.*": {"queue": "scheduler"},
+}
+
 # Optional: Configure periodic tasks
 celery_app.conf.beat_schedule = {
     "run-agent-tasks": {
         "task": "app.tasks.run_agent_tasks",
         "schedule": 300.0,  # Run every 5 minutes
     },
-} 
+    "run-scheduler": {
+        "task": "app.schedular.schedular.process_scheduled_executions",
+        "schedule": 60.0,  # every minute
+        # ENSURE IT USES THE SCHEDULER QUEUE
+        "options": {"queue": "scheduler"},
+    }
+}

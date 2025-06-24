@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List
 import uuid
 from datetime import datetime, timezone
+from pydantic import ValidationError
+import structlog
 
 from ..database import get_db
 from .. import models, schemas
@@ -11,10 +13,41 @@ from ..auth import get_current_active_user
 from app.websocket import manager
 from app.tasks import run_agent  # Import the Celery task
 
+# Initialize logging
+import logging
+
+# Standard logging configuration
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(filename)s:%(lineno)d - %(message)s",
+    level=logging.INFO,
+)
+
+# Structlog configuration
+structlog.configure(
+    processors=[
+        structlog.processors.CallsiteParameterAdder(
+            parameters=[
+                structlog.processors.CallsiteParameter.FILENAME,
+                structlog.processors.CallsiteParameter.LINENO,
+            ]
+        ),
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer()
+    ],
+    context_class=dict,
+    logger_factory=structlog.stdlib.LoggerFactory(),
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+    cache_logger_on_first_use=True,
+)
+
+# Initialize logger
+logger = structlog.get_logger()
+
 router = APIRouter(
     prefix="/agents",
     tags=["agents"]
 )
+
 
 def validate_uuid(uuid_str: str) -> bool:
     try:
@@ -23,61 +56,104 @@ def validate_uuid(uuid_str: str) -> bool:
     except ValueError:
         return False
 
+
 @router.post("/", response_model=schemas.Agent)
 async def create_agent(
-    agent: schemas.AgentCreate,
+    agent_data: schemas.AgentCreate,  # Accept raw dictionary
     db: AsyncSession = Depends(get_db),
     current_user: models.UserModel = Depends(get_current_active_user)
 ):
+    # Ensure agent_platform is present
+    agent_platform = agent_data.agent_platform
+    if not agent_platform:
+        raise HTTPException(
+            status_code=400, detail="agent_platform is required")
+
+    # Validate and parse agent data based on platform
+    # Define a map to your platform-specific schemas
+    schema_map = {
+        "reddit": schemas.AgentCreate,
+        # "twitter": schemas.TwitterAgentRequestSchema, # Add when available
+    }
+    schema_cls = schema_map.get(agent_platform)
+    if not schema_cls:
+        raise HTTPException(
+            status_code=400, detail=f"Unsupported agent_platform: {agent_platform}")
+
+    # Since FastAPI already validated the data, we can use it directly
+    agent_payload = agent_data.model_dump()
+
     # Verify project exists and belongs to user
+    project_uuid = agent_payload.get("project_id")
     result = await db.execute(
         select(models.ProjectModel).filter(
-            models.ProjectModel.uuid == str(agent.project_id),
+            models.ProjectModel.uuid == str(project_uuid),
             models.ProjectModel.owner_id == current_user.id
         )
     )
     project = result.scalars().first()
-    
     if not project:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found or you don't have access to it"
         )
 
-    # Create new agent with actual project ID
-    agent_data = agent.dict()
-    agent_data["project_id"] = project.id
-    db_agent = models.AgentModel(**agent_data)
+    # Map validated data to AgentModel
+    db_agent = models.AgentModel(
+        agent_name=agent_payload["agent_name"],
+        description=agent_payload.get("description"),
+        agent_platform=agent_payload["agent_platform"],
+        agent_status=agent_payload.get("agent_status", "active"),
+        goals=agent_payload["goals"],
+        instructions=agent_payload["instructions"],
+        expectations=agent_payload.get("expectations", ""),
+        keywords=agent_payload.get("keywords", []),
+        project_id=project.uuid,
+        mode=agent_payload["mode"],
+        review_minutes=agent_payload["review_minutes"],
+        advanced_settings=agent_payload.get("advanced_settings", {}),
+        platform_settings=agent_payload.get("platform_settings", {})
+    )
+    if agent_payload.get("schedule"):
+        schedule_time = agent_payload["schedule"]["schedule_time"]
+        if schedule_time is not None:
+            # convert schedule time string to datetime object
+            schedule_time = datetime.strptime(
+                schedule_time, "%Y-%m-%d %H:%M:%S")
+        db_agent.schedule = models.ScheduleModel(
+            schedule_type=agent_payload["schedule"]["schedule_type"],
+            schedule_time=schedule_time if agent_payload[
+                "schedule"]["schedule_type"] != "daily" else datetime.now(timezone.utc).replace(tzinfo=None),
+            days_of_week=agent_payload["schedule"]["days_of_week"] if agent_payload[
+                "schedule"]["schedule_type"] == "weekly" else None,
+            day_of_month=agent_payload["schedule"]["day_of_month"] if agent_payload[
+                "schedule"]["schedule_type"] == "monthly" else None
+        )
+
     db.add(db_agent)
+
+    # Flush to assign IDs before creating related execution entries
+    await db.flush()
+
+    if agent_payload.get("schedule"):
+        # Create an execution entry now that schedule and agent have IDs
+        execution = models.ExecutionModel(
+            schedule_id=db_agent.schedule.id,
+            agent_id=db_agent.id,
+            status=models.ExecutionStatusEnum.scheduled,
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            schedule_time=schedule_time if agent_payload[
+                "schedule"]["schedule_type"] != "daily" else datetime.now(timezone.utc).replace(tzinfo=None)
+        )
+        db.add(execution)
+
     await db.commit()
     await db.refresh(db_agent)
 
-    # Trigger Celery task for the new agent
-    try:
-        # Schedule the task to run
-        run_agent.delay(db_agent.id)
-        
-        # Update agent status to indicate task is scheduled
-        db_agent.agent_status = "scheduled"
-        db_agent.last_run = datetime.utcnow()
-        await db.commit()
-        await db.refresh(db_agent)
-        
-        # Send WebSocket notification
-        await manager.broadcast_to_project(
-            project.id,
-            {
-                "type": "agent_created",
-                "agent_id": db_agent.id,
-                "status": "scheduled",
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        )
-    except Exception as e:
-        # Log the error but don't fail the agent creation
-        print(f"Error scheduling agent task: {str(e)}")
-    
-    return db_agent
+    # Use the Agent schema for the response
+    response_data = schemas.Agent.model_validate(db_agent)
+    return response_data
+
 
 @router.get("/{agent_id}", response_model=schemas.Agent)
 async def get_agent(
@@ -95,13 +171,14 @@ async def get_agent(
         )
     )
     agent = result.scalars().first()
-    
+
     if not agent:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Agent not found or you don't have access to it"
         )
     return agent
+
 
 @router.get("/project/{project_uuid}", response_model=List[schemas.Agent])
 async def get_project_agents(
@@ -124,7 +201,7 @@ async def get_project_agents(
         )
     )
     project = result.scalars().first()
-    
+
     if not project:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -133,10 +210,12 @@ async def get_project_agents(
 
     # Get all agents for the project
     result = await db.execute(
-        select(models.AgentModel).filter(models.AgentModel.project_id == project.id)
+        select(models.AgentModel).filter(
+            models.AgentModel.project_id == project.uuid)
     )
     agents = result.scalars().all()
     return agents
+
 
 @router.put("/{agent_id}", response_model=schemas.Agent)
 async def update_agent(
@@ -155,7 +234,7 @@ async def update_agent(
         )
     )
     db_agent = result.scalars().first()
-    
+
     if not db_agent:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -169,6 +248,7 @@ async def update_agent(
     await db.commit()
     await db.refresh(db_agent)
     return db_agent
+
 
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent(
@@ -186,7 +266,7 @@ async def delete_agent(
         )
     )
     db_agent = result.scalars().first()
-    
+
     if not db_agent:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -197,6 +277,7 @@ async def delete_agent(
     await db.commit()
     return None
 
+
 @router.websocket("/ws/{project_id}")
 async def websocket_endpoint(websocket: WebSocket, project_id: int):
     await manager.connect(websocket, project_id)
@@ -206,6 +287,7 @@ async def websocket_endpoint(websocket: WebSocket, project_id: int):
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket, project_id)
+
 
 @router.get("/{agent_id}/results", response_model=List[schemas.AgentResult])
 async def get_agent_results(
@@ -223,7 +305,7 @@ async def get_agent_results(
         )
     )
     agent = result.scalars().first()
-    
+
     if not agent:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -243,7 +325,7 @@ async def get_agent_results(
         if result_item.status == "completed" and result_item.results:
             # Add agent_platform to results
             result_item.results["agent_platform"] = agent.agent_platform
-            
+
             if agent.agent_platform == "reddit":
                 # Get posts from RedditPostModel for this agent, sorted by relevance score
                 posts_result = await db.execute(
@@ -255,8 +337,8 @@ async def get_agent_results(
                     .order_by(models.RedditPostModel.combined_relevance.desc())
                 )
                 posts = posts_result.scalars().all()
-                
-                # Add sorted posts to the results
+
+                # Add posts to the results
                 if posts:
                     result_item.results["posts"] = [
                         {
@@ -280,8 +362,9 @@ async def get_agent_results(
                 # Convert result_item.created_at to UTC if it has timezone info
                 created_at = result_item.created_at
                 if created_at.tzinfo is not None:
-                    created_at = created_at.astimezone(timezone.utc).replace(tzinfo=None)
-                
+                    created_at = created_at.astimezone(
+                        timezone.utc).replace(tzinfo=None)
+
                 posts_result = await db.execute(
                     select(models.TwitterPostModel)
                     .filter(
@@ -291,7 +374,7 @@ async def get_agent_results(
                     .order_by(models.TwitterPostModel.created.desc())
                 )
                 posts = posts_result.scalars().all()
-                
+
                 # Add posts to the results
                 if posts:
                     result_item.results["posts"] = [
@@ -309,4 +392,4 @@ async def get_agent_results(
                         for post in posts
                     ]
 
-    return results 
+    return results
