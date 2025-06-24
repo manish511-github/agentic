@@ -15,7 +15,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import asyncpraw  # Reddit API (async)
@@ -270,7 +270,7 @@ async def run_reddit_agent(
     # ------------------------------------------------------------------
     # 1. Query Reddit for candidate posts
     # ------------------------------------------------------------------
-    cutoff_ts = (datetime.utcnow() -
+    cutoff_ts = (datetime.now(tz=timezone.utc) -
                  timedelta(days=agent_input.max_age_days)).timestamp()
     logger.debug(f"cuttoff_ts: {cutoff_ts}")
     aggregate: Dict[str, asyncpraw.models.Submission] = {}
@@ -372,7 +372,7 @@ if __name__ == "__main__":
             instructions="Be friendly, helpful and mention our SaaS CRM unobtrusively.",
             expectation="Locate discussions where small-business owners seek affordable CRM recommendations.",
             keywords=["affordable CRM", "small business CRM"],
-            max_posts=10,
+            max_posts=100,
         )
         output = await run_reddit_agent(sample_input)
         print(json.dumps(output.model_dump(), indent=2, default=str))
