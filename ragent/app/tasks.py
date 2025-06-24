@@ -5,8 +5,7 @@ from .database import SessionLocal
 from . import models
 from app.celery_app import celery_app
 from app.models import AgentModel, AgentResultModel, RedditPostModel, ProjectModel, TwitterPostModel
-from app.rdagent import reddit_graph
-from app.xagent import twitter_graph
+from app.core.agents_tasks.rdagent.rd_agent_advanced.graph import reddit_graph
 import structlog
 import asyncio
 import nest_asyncio
