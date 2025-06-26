@@ -5,36 +5,48 @@ import structlog
 import json
 import asyncio
 
+# New shared configuration and rate limiting utilities
+from ...settings import settings
+from ...utils.rate_limiter import reddit_limiter
+
 logger = structlog.get_logger()
+
 
 async def search_subreddits_node(state: AgentState) -> AgentState:
     try:
         target_subreddits = {}
         async with await get_reddit_client() as reddit:
             keywords = state["keywords"]
-            logger.info("Using keywords", agent_name=state["agent_name"], keywords=keywords)
+            logger.info("Using keywords",
+                        agent_name=state["agent_name"], keywords=keywords)
+
             async def search_keyword(kw):
                 result = {}
                 try:
-                    subreddits = reddit.subreddits.search(kw, limit=10)
-                    async for subreddit in subreddits:
-                        result[subreddit.display_name] = subreddit.public_description or subreddit.description
+                    # Honour global Reddit rate-limit
+                    async with reddit_limiter:
+                        subreddits = reddit.subreddits.search(
+                            kw, limit=settings.posts_per_search)
+                        async for subreddit in subreddits:
+                            result[subreddit.display_name] = subreddit.public_description or subreddit.description
                 except Exception as e:
-                    logger.warning("Keyword search failed", keyword=kw, error=str(e))
+                    logger.warning("Keyword search failed",
+                                   keyword=kw, error=str(e))
                 return result
-            for i in range(0, len(keywords), 10):
-                batch = keywords[i:i+10]
+            for i in range(0, len(keywords), settings.embedding_batch_size):
+                batch = keywords[i:i+settings.embedding_batch_size]
                 results = await asyncio.gather(*(search_keyword(kw) for kw in batch))
                 for res in results:
                     target_subreddits.update(res)
                 logger.info("Batch processed", batch=batch)
-                await asyncio.sleep(2)
-            subreddit_data = [{"name": name, "description": description} for name, description in target_subreddits.items()]
+            subreddit_data = [{"name": name, "description": description}
+                              for name, description in target_subreddits.items()]
             llm = get_llm()
             from langchain_core.prompts import PromptTemplate
             from langchain.chains import LLMChain
             prompt = PromptTemplate(
-                input_variables=["subreddits", "expectation", "description", "target_audience"],
+                input_variables=["subreddits", "expectation",
+                                 "description", "target_audience"],
                 template=(
                     "Evaluate these subreddits for relevance to our marketing needs. "
                     "Follow these instructions carefully:\n\n"
@@ -63,7 +75,7 @@ async def search_subreddits_node(state: AgentState) -> AgentState:
                 )
             )
             chain = LLMChain(llm=llm, prompt=prompt)
-            BATCH_SIZE = 10
+            BATCH_SIZE = settings.llm_batch_size
             final_subreddits = []
             for i in range(0, len(subreddit_data), BATCH_SIZE):
                 batch = subreddit_data[i:i + BATCH_SIZE]
@@ -78,13 +90,15 @@ async def search_subreddits_node(state: AgentState) -> AgentState:
                     logger.info("Response received", response=response)
                     batch_results = json.loads(response.lower())
                     final_subreddits.extend(batch_results)
-                    await asyncio.sleep(2)
                 except Exception as e:
-                    logger.warning(f"Batch processing failed: {str(e)}", batch_index=i//BATCH_SIZE, error=str(e))
+                    logger.warning(
+                        f"Batch processing failed: {str(e)}", batch_index=i//BATCH_SIZE, error=str(e))
                     continue
-            logger.info("Relevant subreddits selected", agent_name=state["agent_name"], relevant_subreddits=final_subreddits)
+            logger.info("Relevant subreddits selected",
+                        agent_name=state["agent_name"], relevant_subreddits=final_subreddits)
             state["subreddits"] = final_subreddits
     except Exception as e:
         state["error"] = f"Subreddit search failed: {str(e)}"
-        logger.error("Subreddit search failed", agent_name=state["agent_name"], error=str(e))
-    return state 
+        logger.error("Subreddit search failed",
+                     agent_name=state["agent_name"], error=str(e))
+    return state

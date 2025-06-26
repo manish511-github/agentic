@@ -132,3 +132,6 @@ qdrant-client==1.7.0  # Vector database client
 # huggingface-hub==0.16.4
 # Google
 google-genai==1.20
+
+# ---- New dependencies for async rate-limiting ----
+aiolimiter==1.1.0
