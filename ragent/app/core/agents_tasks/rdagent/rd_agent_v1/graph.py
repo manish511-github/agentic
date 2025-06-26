@@ -25,8 +25,7 @@ def create_reddit_graph() -> StateGraph:
     graph.add_edge("fetch_posts_node", END)
     return graph.compile()
 
-# Basic Reddot Agent Call -
-
+# Basic Reddit Agent Call -
 
 def create_basic_reddit_graph() -> StateGraph:
     graph = StateGraph(AgentState)
