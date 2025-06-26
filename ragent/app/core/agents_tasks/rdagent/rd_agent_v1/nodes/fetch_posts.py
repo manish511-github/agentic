@@ -1,7 +1,7 @@
 from ..state import AgentState
 from ..reddit_client import get_reddit_client
 from app.core.llm_client import get_embedding_model, get_llm
-from app.core.vector_db import get_qdrant_client
+from app.core.vector_db import get_collection_name, get_qdrant_client
 import structlog
 from datetime import datetime
 import asyncio
@@ -21,7 +21,7 @@ async def fetch_basic_post_nodes(state: AgentState) -> AgentState:
         async with await get_reddit_client() as reddit:
             posts = []
             seen_post_ids = set()
-
+            semaphore = asyncio.Semaphore(settings.max_concurrency)
             async def process_subreddit(subreddit_name: str):
                 async with semaphore:
                     subreddit_posts = []
@@ -94,7 +94,7 @@ async def fetch_basic_post_nodes(state: AgentState) -> AgentState:
                 return subreddit_posts
             subreddit_names = state.get("subreddits", [])
             posts = []
-            subreddit_names = subreddit_names[:20]  # Keep only the first 10 subreddit names
+            subreddit_names = subreddit_names[:30]  # Keep only the first 10 subreddit names
             for name in subreddit_names:
                 try:
                     res = await process_subreddit(name)
@@ -111,59 +111,61 @@ async def fetch_basic_post_nodes(state: AgentState) -> AgentState:
             batch_size = settings.llm_batch_size
             all_scores = []
             import json
-            for batch in batchify(posts, batch_size):
-                try:
-                    prompt = (
-                        f"Score the relevance (0-1, float) of each post for a product with the following details:\n"
-                        f"Product Description: {state['description']}\n"
-                        f"Goals: {', '.join(state['goals'])} (ensure posts support these marketing objectives)\n"
-                        f"Expectation: {state['expectation']} (posts should match this content focus)\n"
-                        f"Target Audience: {state['target_audience']}\n"
-                        f"Keywords: {', '.join(state['company_keywords'])}\n\n"
-                        "Posts:\n" +
-                        "\n".join([
-                            f"Post {i}: {c['post_title']}\n{c['post_body'][:1000]}"
-                            for i, c in enumerate(batch, 1)
-                        ]) +
-                        f"\n\nOUTPUT REQUIREMENTS:\n"
-                        f"- Return ONLY a valid JSON array of floats (0-1), one for each post above.\n"
-                        f"- The array must have exactly {len(batch)} numbers, in the same order as the posts.\n"
-                        f"- DO NOT include any markdown, code block, backticks, or extra text.\n"
-                        f"- DO NOT include any explanation or formatting.\n"
-                        f"- Your response MUST be a plain JSON array, e.g. [0.7, 0.3, 0.9, 0.5] and nothing else.\n"
-                    )
-                    response = await llm.ainvoke(prompt)
-                    scores_raw = response.content if hasattr(
-                        response, 'content') else response
-                    logger.info(f"Raw LLM response: {scores_raw}")
-                    # Remove markdown code block if present
-                    cleaned = scores_raw.strip()
-                    if cleaned.startswith('```json'):
-                        cleaned = cleaned[7:]
-                    if cleaned.startswith('```'):
-                        cleaned = cleaned[3:]
-                    if cleaned.endswith('```'):
-                        cleaned = cleaned[:-3]
-                    cleaned = cleaned.strip()
-                    if not cleaned:
-                        raise ValueError("LLM returned empty response")
+            semaphore = asyncio.Semaphore(10)
+
+            async def score_batch(batch):
+                prompt = (
+                    f"Score the relevance (0-1, float) of each post for a product with the following details:\n"
+                    f"Product Description: {state['description']}\n"
+                    f"Goals: {', '.join(state['goals'])} (ensure posts support these marketing objectives)\n"
+                    f"Expectation: {state['expectation']} (posts should match this content focus)\n"
+                    f"Target Audience: {state['target_audience']}\n"
+                    f"Keywords: {', '.join(state['company_keywords'])}\n\n"
+                    "Posts:\n" +
+                    "\n".join([
+                        f"Post {i}: {c['post_title']}\n{c['post_body'][:1000]}"
+                        for i, c in enumerate(batch, 1)
+                    ]) +
+                    f"\n\nOUTPUT REQUIREMENTS:\n"
+                    f"- Return ONLY a valid JSON array of floats (0-1), one for each post above.\n"
+                    f"- The array must have exactly {len(batch)} numbers, in the same order as the posts.\n"
+                    f"- DO NOT include any markdown, code block, backticks, or extra text.\n"
+                    f"- DO NOT include any explanation or formatting.\n"
+                    f"- Your response MUST be a plain JSON array, e.g. [0.7, 0.3, 0.9, 0.5] and nothing else.\n"
+                )
+                async with semaphore:
                     try:
-                        scores = json.loads(cleaned)
-                    except Exception as parse_err:
-                        logger.error("Failed to parse LLM response as JSON", error=str(
-                            parse_err), response=scores_raw)
-                        scores = [0.0] * len(batch)
-                    if not isinstance(scores, list) or len(scores) != len(batch):
-                        logger.error(
-                            "LLM response is not a list of correct length", response=scores_raw)
-                        scores = [0.0] * len(batch)
-                    all_scores.extend(scores)
-                    logger.info(
-                        f"Processed batch of {len(batch)} posts with {len(scores)} scores returned")
-                except Exception as e:
-                    logger.error("LLM batch scoring failed", error=str(e))
-                    # fallback: assign 0.0 to all in batch
-                    all_scores.extend([0.0] * len(batch))
+                        response = await llm.ainvoke(prompt)
+                        scores_raw = response.content if hasattr(response, 'content') else response
+                        logger.info(f"Raw LLM response: {scores_raw}")
+                        cleaned = scores_raw.strip()
+                        if cleaned.startswith('```json'):
+                            cleaned = cleaned[7:]
+                        if cleaned.startswith('```'):
+                            cleaned = cleaned[3:]
+                        if cleaned.endswith('```'):
+                            cleaned = cleaned[:-3]
+                        cleaned = cleaned.strip()
+                        if not cleaned:
+                            raise ValueError("LLM returned empty response")
+                        try:
+                            scores = json.loads(cleaned)
+                        except Exception as parse_err:
+                            logger.error("Failed to parse LLM response as JSON", error=str(parse_err), response=scores_raw)
+                            scores = [0.0] * len(batch)
+                        if not isinstance(scores, list) or len(scores) != len(batch):
+                            logger.error("LLM response is not a list of correct length", response=scores_raw)
+                            scores = [0.0] * len(batch)
+                        logger.info(f"Processed batch of {len(batch)} posts with {len(scores)} scores returned")
+                        return scores
+                    except Exception as e:
+                        logger.error("LLM batch scoring failed", error=str(e))
+                        return [0.0] * len(batch)
+
+            batch_tasks = [score_batch(batch) for batch in batchify(posts, batch_size)]
+            batch_results = await asyncio.gather(*batch_tasks)
+            for scores in batch_results:
+                all_scores.extend(scores)
             for post, score in zip(posts, all_scores):
                 post["llm_relevance"] = score
             logger.info("Fetch posts completed", agent_name=state["agent_name"], posts_count=(posts))
@@ -211,7 +213,7 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
         embedding_model = get_embedding_model()
         logger.info("Initialized Qdrant client and embedding model")
 
-        collection_name = "subreddit_posts"
+        collection_name = get_collection_name(state["agent_name"],"rdagent_v1")
         try:
             try:
                 qdrant_client.delete_collection(collection_name)

@@ -17,7 +17,7 @@ class RedditAgentSettings(BaseSettings):
     max_concurrency: int = 20
 
     # How many posts to request for each search/listing call
-    posts_per_search: int = 30
+    posts_per_search: int = 20
 
     # The post listing categories (order matters) to scan for each subreddit.
     # Valid values: "hot", "new", "top", "rising", etc.

@@ -9,7 +9,7 @@ import asyncio
 from qdrant_client.http.models import VectorParams, Distance, PointStruct
 from ...settings import settings
 from ...utils.rate_limiter import reddit_limiter
-from praw.models import SubredditHelper, Submission
+from asyncpraw.models import SubredditHelper, Submission
 
 logger = structlog.get_logger()
 
@@ -43,7 +43,12 @@ async def create_collection(collection_name):
     """
     qdrant_client = get_qdrant_client()
     try:
-        qdrant_client.create_collection(collection_name)
+        # Specify the vector size according to your embedding model (default: 768)
+        VECTOR_SIZE = 768
+        qdrant_client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE)
+        )
         logger.info(f"Created new collection {collection_name}")
     except Exception as e:
         logger.error(f"Error creating collection: {str(e)}")
@@ -174,54 +179,53 @@ async def search_posts_directly_node(state: AgentState) -> AgentState:
                     continue
 
                 # Embed the submissions in the Vector DB in batches
-                for j in range(0, len(batch_posts), EMBEDDING_BATCH_SIZE):
-
-                    # create a batch of posts to embed
-                    embedding_batch = batch_posts[j:j + EMBEDDING_BATCH_SIZE]
+                semaphore = asyncio.Semaphore(10)
+                
+                async def embed_and_upsert(embedding_batch):
                     texts = [post["text"] for post in embedding_batch]
-                    embeddings = await generate_embeddings_batch(texts)
+                    async with semaphore:
+                        embeddings = await generate_embeddings_batch(texts)
+                        batch_points = []
+                        batch_posts = []
+                        for post, embedding in zip(embedding_batch, embeddings):
+                            if embedding is None:
+                                continue
+                            batch_points.append(PointStruct(
+                                id=abs(hash(post["post_id"])) % (2**63),
+                                vector=embedding,
+                                payload={
+                                    "submission_id": post["post_id"],
+                                    "title": post["post_title"],
+                                    "content": post["post_body"],
+                                    "url": post["post_url"],
+                                    "created_utc": datetime.fromisoformat(post["created"]).timestamp(),
+                                    "subreddit": post["subreddit"],
+                                    "score": post["upvotes"],
+                                    "num_comments": post["comment_count"],
+                                    "keyword_relevance": post["keyword_relevance"]
+                                }
+                            ))
+                            post.pop("text", None)
+                            batch_posts.append(post)
+                        if batch_points:
+                            try:
+                                qdrant_client.upsert(
+                                    collection_name=collection_name,
+                                    points=batch_points
+                                )
+                            except Exception as e:
+                                logger.error(f"Error upserting batch: {str(e)}")
+                        return batch_posts
 
-                    # embed the posts in the Vector DB
-                    for post, embedding in zip(embedding_batch, embeddings):
-                        if embedding is None:
-                            continue
-                        current_batch.append(PointStruct(
-                            id=abs(hash(post["post_id"])) % (2**63),
-                            vector=embedding,
-                            payload={
-                                "submission_id": post["post_id"],
-                                "title": post["post_title"],
-                                "content": post["post_body"],
-                                "url": post["post_url"],
-                                "created_utc": datetime.fromisoformat(post["created"]).timestamp(),
-                                "subreddit": post["subreddit"],
-                                "score": post["upvotes"],
-                                "num_comments": post["comment_count"],
-                                "keyword_relevance": post["keyword_relevance"]
-                            }
-                        ))
-                        post.pop("text", None)
-                        posts.append(post)
-                    if len(current_batch) >= BATCH_SIZE:
-                        try:
-                            qdrant_client.upsert(
-                                collection_name=collection_name,
-                                points=current_batch
-                            )
-                            current_batch = []
-                        except Exception as e:
-                            logger.error(f"Error upserting batch: {str(e)}")
-                            current_batch = []
+                embed_tasks = []
+                for j in range(0, len(batch_posts), EMBEDDING_BATCH_SIZE):
+                    embedding_batch = batch_posts[j:j + EMBEDDING_BATCH_SIZE]
+                    embed_tasks.append(embed_and_upsert(embedding_batch))
+                embed_results = await asyncio.gather(*embed_tasks)
 
-            # Upsert the final batch
-            if current_batch:
-                try:
-                    qdrant_client.upsert(
-                        collection_name=collection_name,
-                        points=current_batch
-                    )
-                except Exception as e:
-                    logger.error(f"Error upserting final batch: {str(e)}")
+                for batch_posts_result in embed_results:
+                    posts.extend(batch_posts_result)
+                current_batch = []  # Clear current_batch since upserts are handled in tasks
 
             # Semantic search the posts in the Vector DB
         try:
@@ -257,10 +261,10 @@ async def search_posts_directly_node(state: AgentState) -> AgentState:
             logger.error(f"Semantic search failed: {str(e)}")
             posts.sort(key=lambda x: (
                 x["keyword_relevance"], x["upvotes"]), reverse=True)
-        state["posts"] = semantic_posts
+        state["direct_posts"] = semantic_posts
         logger.info("Direct post search completed with semantic ranking", agent_name=state["agent_name"], posts_found=len(
             state["posts"]), unique_queries_used=search_queries)
     except Exception as e:
         state["error"] = f"Direct post search failed: {str(e)}"
         logger.error("Direct post search failed", error=str(e))
-    return state
+    return semantic_posts
