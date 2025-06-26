@@ -5,10 +5,26 @@ from app.core.llm_client import get_llm
 logger = structlog.get_logger()
 
 async def generate_queries_node(state):
+    """
+    1. Generates a comprehensive list of search queries for finding relevant Reddit discussions based on company information.
+    2. This function takes the current state of the agent as input and generates a list of search queries that can be used to find relevant discussions on Reddit. 
+    3. The queries are generated based on various aspects of the company, including its name, goals, keywords, description, target audience, and expected content. 
+    4. The function returns the state with the generated queries.
+
+    Parameters:
+    - state (dict): The current state of the agent, containing information about the company and its goals.
+
+    Returns:
+    - state (dict): The updated state with the generated search queries.
+    """
+
+    logger.info("Starting generate_queries_node", node_name="generate_queries_node")
+    
     if state.get("error"):
         return state
     try:
         llm = get_llm()
+        # Get company data from state
         company_data = {
             "agent_name": state.get("agent_name", ""),
             "goals": state.get("goals", []),
@@ -18,6 +34,9 @@ async def generate_queries_node(state):
             "target_audience": state.get("target_audience", ""),
             "expectation": state.get("expectation", "")
         }
+
+        # Define the prompt
+
         prompt = f"""Based on the following company information, generate a comprehensive list of search queries for finding relevant Reddit discussions. 
         Focus on generating queries that will help find posts about our product, its broader category, target audience, and industry.
         Keep each query under 50 characters and make them specific and relevant.
@@ -62,9 +81,13 @@ async def generate_queries_node(state):
         - NO explanations or additional text
 
         YOUR RESPONSE:"""
+
         response = await llm.ainvoke(prompt)
         raw = response.content if hasattr(response, 'content') else response
         logger.info(f"Raw LLM query response: {raw}")
+
+       # Cleaning the raw data
+
         cleaned = raw.strip()
         if cleaned.startswith('```json'):
             cleaned = cleaned[7:]
@@ -73,6 +96,8 @@ async def generate_queries_node(state):
         if cleaned.endswith('```'):
             cleaned = cleaned[:-3]
         cleaned = cleaned.strip()
+
+        # Parsing the cleaned data
         try:
             queries = json.loads(cleaned)
             if not isinstance(queries, list):
@@ -80,10 +105,13 @@ async def generate_queries_node(state):
         except Exception as e:
             logger.error("Failed to parse LLM query response as JSON", error=str(e), response=raw)
             queries = company_data['company_keywords']
+            
+        # Keep company keywords also in the queries
         queries = list(set(queries + company_data['company_keywords']))
         queries = [q for q in queries if len(q) <= 50]
         state["keywords"] = queries
         logger.info("Generated search queries using LLM", agent_name=state.get("agent_name", ""), queries=queries)
+        
     except Exception as e:
         state["error"] = f"Query generation failed: {str(e)}"
         logger.error("Query generation failed", error=str(e))

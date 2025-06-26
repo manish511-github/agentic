@@ -94,6 +94,7 @@ async def fetch_basic_post_nodes(state: AgentState) -> AgentState:
                 return subreddit_posts
             subreddit_names = state.get("subreddits", [])
             posts = []
+            subreddit_names = subreddit_names[:20]  # Keep only the first 10 subreddit names
             for name in subreddit_names:
                 try:
                     res = await process_subreddit(name)
@@ -165,7 +166,8 @@ async def fetch_basic_post_nodes(state: AgentState) -> AgentState:
                     all_scores.extend([0.0] * len(batch))
             for post, score in zip(posts, all_scores):
                 post["llm_relevance"] = score
-            state["posts"] = posts
+            logger.info("Fetch posts completed", agent_name=state["agent_name"], posts_count=(posts))
+            state["subreddit_posts"] = posts
     except Exception as e:
         state["error"] = f"Post fetching failed: {str(e)}"
         logger.error(
@@ -174,7 +176,7 @@ async def fetch_basic_post_nodes(state: AgentState) -> AgentState:
             stack_info=True,
             agent_name=state.get("agent_name", "unknown")
         )
-    return state
+    return posts
 
 
 async def fetch_posts_node(state: AgentState) -> AgentState:
