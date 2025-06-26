@@ -77,23 +77,31 @@ async def search_subreddits_node(state: AgentState) -> AgentState:
             chain = LLMChain(llm=llm, prompt=prompt)
             BATCH_SIZE = settings.llm_batch_size
             final_subreddits = []
-            for i in range(0, len(subreddit_data), BATCH_SIZE):
-                batch = subreddit_data[i:i + BATCH_SIZE]
+            semaphore = asyncio.Semaphore(10)
+
+            async def process_batch(batch, batch_index):
                 batch_json = json.dumps(batch)
-                try:
-                    response = await chain.arun(
-                        subreddits=batch_json,
-                        expectation=state["expectation"],
-                        description=state["description"],
-                        target_audience=state["target_audience"]
-                    )
-                    logger.info("Response received", response=response)
-                    batch_results = json.loads(response.lower())
-                    final_subreddits.extend(batch_results)
-                except Exception as e:
-                    logger.warning(
-                        f"Batch processing failed: {str(e)}", batch_index=i//BATCH_SIZE, error=str(e))
-                    continue
+                async with semaphore:
+                    try:
+                        response = await chain.arun(
+                            subreddits=batch_json,
+                            expectation=state["expectation"],
+                            description=state["description"],
+                            target_audience=state["target_audience"]
+                        )
+                        logger.info("Response received", response=response)
+                        batch_results = json.loads(response.lower())
+                        return batch_results
+                    except Exception as e:
+                        logger.warning(
+                            f"Batch processing failed: {str(e)}", batch_index=batch_index, error=str(e))
+                        return []
+
+            batches = [subreddit_data[i:i + BATCH_SIZE] for i in range(0, len(subreddit_data), BATCH_SIZE)]
+            tasks = [process_batch(batch, idx) for idx, batch in enumerate(batches)]
+            results = await asyncio.gather(*tasks)
+            for batch_results in results:
+                final_subreddits.extend(batch_results)
             logger.info("Relevant subreddits selected",
                         agent_name=state["agent_name"], relevant_subreddits=final_subreddits)
             state["subreddits"] = final_subreddits
