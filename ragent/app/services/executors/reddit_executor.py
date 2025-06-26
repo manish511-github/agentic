@@ -4,7 +4,7 @@ import structlog
 
 from .base_executor import BaseAgentExecutor
 from .result_mappers import get_result_mapper
-from app.rdagent import reddit_graph
+from app.core.agents_tasks.rdagent.rd_agent_v1.graph import reddit_graph
 
 logger = structlog.get_logger()
 
