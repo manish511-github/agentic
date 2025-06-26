@@ -7,90 +7,13 @@ undetected-chromedriver==3.5.3
 nest_asyncio==1.6.0
 
 fastapi-limiter
-# LangChain ecosystem - updated to latest stable versions
-langchain==0.1.14
-langchain-google-genai==0.0.11  # Latest available version compatible with langchain-core
-langchain-core==0.1.45
-langgraph==0.0.33
-langsmith==0.1.75  # Explicitly set to resolve conflicts
 
-python-dotenv==1.0.0
-tenacity==8.2.3
-sqlalchemy[asyncio]==2.0.23
-asyncpg==0.29.0
-alembic==1.13.1
-redis==5.0.0
-structlog==23.1.0
-asyncpraw
-asyncprawcore
-python-multipart
-python-jose[cryptography]==3.3.0  # for JWT support
-passlib[bcrypt]==1.7.4      
-psycopg2-binary==2.9.9 
+langchain==0.3.26
+langchain-google-genai==2.1.5 
+langchain-core==0.3.66
+langgraph==0.4.9
 
-# Celery and its dependencies
-celery==5.3.6
-flower==2.0.1  # Optional: for monitoring Celery tasks 
 
-# Pydantic settings
-pydantic-settings==2.2.1
-
-rpdb==0.1.6 
-uvicorn==0.23.2
-aiohttp==3.8.5
-beautifulsoup4==4.12.2
-selenium==4.11.2
-undetected-chromedriver==3.5.3
-nest_asyncio==1.6.0
-
-fastapi-limiter
-
-# LangChain ecosystem - updated to latest stable versions
-langchain==0.1.14
-langchain-google-genai==0.0.11  # Latest available version compatible with langchain-core
-langchain-core==0.1.45
-langgraph==0.0.33
-langsmith==0.1.75  # Explicitly set to resolve conflicts
-
-python-dotenv==1.0.0
-tenacity==8.2.3
-sqlalchemy[asyncio]==2.0.23
-asyncpg==0.29.0
-alembic==1.13.1
-redis==5.0.0
-structlog==23.1.0
-asyncpraw
-asyncprawcore
-python-multipart
-python-jose[cryptography]==3.3.0  # for JWT support
-passlib[bcrypt]==1.7.4
-psycopg2-binary==2.9.9
-
-# Celery and its dependencies
-celery==5.3.6
-flower==2.0.1  # Optional: for monitoring Celery tasks
-
-# Pydantic settings
-pydantic-settings==2.2.1
-
-rpdb==0.1.6
-
-# Twitter integration
-
-uvicorn==0.23.2
-aiohttp==3.8.5
-beautifulsoup4==4.12.2
-selenium==4.11.2
-undetected-chromedriver==3.5.3
-nest_asyncio==1.6.0
-
-fastapi-limiter
-# LangChain ecosystem - updated to latest stable versions
-langchain==0.1.14
-langchain-google-genai==0.0.11  # Latest available version compatible with langchain-core
-langchain-core==0.1.45
-langgraph==0.0.33
-langsmith==0.1.75  # Explicitly set to resolve conflicts
 
 python-dotenv==1.0.0
 tenacity==8.2.3

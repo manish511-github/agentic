@@ -1,8 +1,8 @@
-"""initial
+"""init
 
-Revision ID: d657377a2649
+Revision ID: b95e05783600
 Revises: 
-Create Date: 2025-06-21 16:12:51.865341
+Create Date: 2025-06-25 14:20:14.051481
 
 """
 from alembic import op
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = 'd657377a2649'
+revision = 'b95e05783600'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -150,7 +150,7 @@ def upgrade():
     sa.Column('schedule_id', sa.Integer(), nullable=True),
     sa.Column('agent_id', sa.Integer(), nullable=True),
     sa.Column('schedule_time', sa.DateTime(), nullable=False),
-    sa.Column('status', sa.Enum('scheduled', 'running', 'completed', 'failed', name='executionstatusenum'), nullable=False),
+    sa.Column('status', sa.Enum('scheduled', 'queued', 'running', 'completed', 'failed', name='executionstatusenum'), nullable=False),
     sa.Column('results', sa.JSON(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.ForeignKeyConstraint(['agent_id'], ['agents.id'], ),

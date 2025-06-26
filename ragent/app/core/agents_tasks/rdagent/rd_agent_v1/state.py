@@ -17,6 +17,8 @@ class AgentState(TypedDict):
     restrict_to_goal_subreddits: bool
     subreddits: List[str]
     posts: List[Dict]
+    direct_posts: List[Dict]
+    subreddit_posts: List[Dict]
     retries: int
     error: Optional[str]
     db: Optional[AsyncSession]
@@ -36,6 +38,8 @@ class RedditAgentOutput(BaseModel):
     goals: List[str]
     instructions: str
     posts: List[RedditPost]
+    direct_posts: List[Dict]
+    subreddit_posts: List[Dict]
 
 class RedditAgentInput(BaseModel):
     agent_name: str = Field(..., min_length=1, description="Name of the marketing agent")

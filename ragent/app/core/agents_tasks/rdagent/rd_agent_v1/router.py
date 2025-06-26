@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from fastapi_limiter.depends import RateLimiter
 from sqlalchemy.ext.asyncio import AsyncSession
 from .state import RedditAgentInput, AgentState
-from .graph import reddit_graph
+from .graph import reddit_graph, parallel_reddit_graph
 from app.database import get_db
 import structlog
 
@@ -26,12 +26,14 @@ async def run_reddit_agent(input: RedditAgentInput, db: AsyncSession = Depends(g
             subreddits=[],
             keywords=[],
             posts=[],
+            subreddit_posts=[],
+            direct_posts=[],
             retries=0,
             error=None,
             db=db,
             llm=None
         )
-        result = await reddit_graph.ainvoke(initial_state)
+        result = await parallel_reddit_graph.ainvoke(initial_state)
         return result
     except Exception as e:
         logger.error("Reddit agent processing failed", agent_name=input.agent_name, error=str(e))
