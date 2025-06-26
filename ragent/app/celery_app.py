@@ -46,10 +46,6 @@ celery_app.conf.task_routes = {
 
 # Optional: Configure periodic tasks
 celery_app.conf.beat_schedule = {
-    "run-agent-tasks": {
-        "task": "app.tasks.run_agent_tasks",
-        "schedule": 300.0,  # Run every 5 minutes
-    },
     "run-scheduler": {
         "task": "app.schedular.schedular.process_scheduled_executions",
         "schedule": 60.0,  # every minute

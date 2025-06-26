@@ -14,6 +14,9 @@ from app.sse import router as sse_router  # Add this import
 # Import the agent generator router
 from app.api.generate_profile import router as agent_generator_router
 from app.database import init_db
+from app.core.agents_tasks.hn_agent.hnagent import router as hnagent_router
+# Import the xagent router
+from app.core.agents_tasks.xagent import router as xagent_router
 
 import math
 from fastapi.middleware.cors import CORSMiddleware  # Import CORSMiddleware
@@ -58,7 +61,6 @@ async def startup_event():
 # Mount router
 app.include_router(agent_router)
 app.include_router(rdagent_router)
-app.include_router(xdagent_router)
 app.include_router(auth_router, prefix="/auth",
                    tags=["auth"])  # Include the auth router
 app.include_router(projects_router)
@@ -66,6 +68,8 @@ app.include_router(agents_router)  # Include the agents router
 app.include_router(sse_router, prefix="/sse", tags=["sse"])  # Add this line
 app.include_router(agent_generator_router, prefix="/agents",
                    tags=["agent"])  # Include the agent generator router
+app.include_router(hnagent_router, tags=["hackernews"])
+app.include_router(xagent_router, tags=["xagent"])  # Include the xagent router
 
 
 # if __name__ == "__main__":
