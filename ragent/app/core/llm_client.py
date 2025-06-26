@@ -9,6 +9,7 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 _embedding_model = None
 _llm = None
 
+
 def get_embedding_model():
     """Get or create embedding model instance."""
     global _embedding_model
@@ -24,13 +25,14 @@ def get_embedding_model():
             raise
     return _embedding_model
 
+
 def get_llm():
     """Get or create LLM instance."""
     global _llm
     if _llm is None:
         try:
             _llm = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash-lite-preview-06-17",
+                model="gemini-2.0-flash",
                 google_api_key=GOOGLE_API_KEY,
                 temperature=0.7,
                 max_output_tokens=2048
@@ -39,4 +41,4 @@ def get_llm():
         except Exception as e:
             logger.error(f"Failed to initialize LLM: {e}")
             raise
-    return _llm 
+    return _llm

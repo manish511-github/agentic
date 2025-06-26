@@ -7,6 +7,8 @@ from .nodes.fetch_posts import fetch_posts_node, fetch_basic_post_nodes
 from .nodes.generate_queries import generate_queries_node
 
 # Advanced Reddit Agent Call
+
+
 def create_reddit_graph() -> StateGraph:
     graph = StateGraph(AgentState)
     graph.add_node("validate_input", validate_input_node)
@@ -24,6 +26,8 @@ def create_reddit_graph() -> StateGraph:
     return graph.compile()
 
 # Basic Reddot Agent Call -
+
+
 def create_basic_reddit_graph() -> StateGraph:
     graph = StateGraph(AgentState)
     graph.add_node("validate_input", validate_input_node)
@@ -31,14 +35,15 @@ def create_basic_reddit_graph() -> StateGraph:
     graph.add_node("search_posts_directly_node", search_posts_directly_node)
     graph.add_node("search_subreddits_node", search_subreddits_node)
     graph.add_node("fetch_basic_post_node", fetch_basic_post_nodes)
-    graph.set_entry_point("fetch_basic_post_node")
+    graph.set_entry_point("validate_input")
 
     graph.add_edge("validate_input", "generate_queries_node")
     graph.add_edge("generate_queries_node", "search_posts_directly_node")
     graph.add_edge("search_posts_directly_node", "search_subreddits_node")
-    graph.add_edge("search_subreddits_node", "fetch_basic_post_nodes")
+    graph.add_edge("search_subreddits_node", "fetch_basic_post_node")
     graph.add_edge("fetch_basic_post_node", END)
     return graph.compile()
 
+
 reddit_graph = create_reddit_graph()
-basic_redit_agent = create_basic_reddit_graph() 
+basic_redit_agent = create_basic_reddit_graph()
