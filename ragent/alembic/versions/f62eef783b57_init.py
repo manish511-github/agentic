@@ -1,8 +1,8 @@
 """init
 
-Revision ID: b95e05783600
+Revision ID: f62eef783b57
 Revises: 
-Create Date: 2025-06-25 14:20:14.051481
+Create Date: 2025-06-28 19:44:32.594450
 
 """
 from alembic import op
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = 'b95e05783600'
+revision = 'f62eef783b57'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -52,15 +52,19 @@ def upgrade():
     op.create_index(op.f('ix_twitter_posts_id'), 'twitter_posts', ['id'], unique=False)
     op.create_table('users',
     sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('username', sa.String(), nullable=True),
-    sa.Column('email', sa.String(), nullable=True),
-    sa.Column('hashed_password', sa.String(), nullable=True),
+    sa.Column('username', sa.String(length=150), nullable=True),
+    sa.Column('email', sa.String(length=255), nullable=True),
+    sa.Column('hashed_password', sa.String(length=100), nullable=True),
+    sa.Column('is_active', sa.Boolean(), nullable=True),
+    sa.Column('verified_at', sa.DateTime(), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index('idx_username_email', 'users', ['username', 'email'], unique=False)
     op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
     op.create_index(op.f('ix_users_id'), 'users', ['id'], unique=False)
-    op.create_index(op.f('ix_users_username'), 'users', ['username'], unique=True)
+    op.create_index(op.f('ix_users_username'), 'users', ['username'], unique=False)
     op.create_table('website_data',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('url', sa.String(), nullable=False),
@@ -97,6 +101,18 @@ def upgrade():
     )
     op.create_index(op.f('ix_projects_id'), 'projects', ['id'], unique=False)
     op.create_index(op.f('ix_projects_uuid'), 'projects', ['uuid'], unique=True)
+    op.create_table('user_tokens',
+    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=True),
+    sa.Column('access_key', sa.String(length=250), nullable=True),
+    sa.Column('refresh_key', sa.String(length=250), nullable=True),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+    sa.Column('expires_at', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_user_tokens_access_key'), 'user_tokens', ['access_key'], unique=False)
+    op.create_index(op.f('ix_user_tokens_refresh_key'), 'user_tokens', ['refresh_key'], unique=False)
     op.create_table('agents',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('agent_name', sa.String(), nullable=False),
@@ -189,6 +205,9 @@ def downgrade():
     op.drop_table('agent_results')
     op.drop_index(op.f('ix_agents_id'), table_name='agents')
     op.drop_table('agents')
+    op.drop_index(op.f('ix_user_tokens_refresh_key'), table_name='user_tokens')
+    op.drop_index(op.f('ix_user_tokens_access_key'), table_name='user_tokens')
+    op.drop_table('user_tokens')
     op.drop_index(op.f('ix_projects_uuid'), table_name='projects')
     op.drop_index(op.f('ix_projects_id'), table_name='projects')
     op.drop_table('projects')

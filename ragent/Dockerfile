@@ -1,18 +1,20 @@
 FROM python:3.10-slim
-   # Install system dependencies
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-wget \
-gnupg \
-unzip \
-curl \
-# chromium \
-# gcc \
-# g++ \
-# build-essential \
-# software-properties-common \
-# git \
-&& rm -rf /var/lib/apt/lists/*
+   wget \
+   gnupg \
+   unzip \
+   curl \
+   # chromium \
+   # gcc \
+   # g++ \
+   # build-essential \
+   # software-properties-common \
+   # git \
+   && rm -rf /var/lib/apt/lists/*
 
+# Install uv
+RUN pip install uv
 
 # Set working directory
 WORKDIR /app
@@ -20,8 +22,8 @@ ENV PYTHONPATH=/app
 
 # Copy requirements and install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
- && pip install --no-cache-dir watchgod
+RUN uv pip install --system --no-cache -r requirements.txt \
+   && uv pip install --system --no-cache watchgod
 
 # Commented out SentenceTransformer model pre-download
 # Pre-download the SentenceTransformer model
@@ -33,7 +35,7 @@ COPY . .
 # Create necessary directories
 # Commented out model_cache directory (was used for SentenceTransformer)
 # RUN mkdir -p /app/model_cache /app/cookies
-RUN mkdir -p /app/cookies
+# RUN mkdir -p /app/cookies
 
 # Expose port
 EXPOSE 8000
