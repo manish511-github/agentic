@@ -248,6 +248,16 @@ services:
       - sentence_transformer_cache:/app/model_cache
     command: celery -A app.celery_app worker -Q scheduler -c 1 --loglevel=info
 
+  smtp-service:
+    image: axllent/mailpit
+    restart: unless-stopped
+    container_name: smtp
+    networks:
+      - market-network
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
 volumes:
   postgres-data:
   twitter_cookies:

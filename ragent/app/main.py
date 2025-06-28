@@ -17,6 +17,8 @@ from app.database import init_db
 from app.core.agents_tasks.hn_agent.hnagent import router as hnagent_router
 # Import the xagent router
 from app.core.agents_tasks.xagent import router as xagent_router
+from app.api.users.routes.user import user_router
+
 
 import math
 from fastapi.middleware.cors import CORSMiddleware  # Import CORSMiddleware
@@ -70,7 +72,7 @@ app.include_router(agent_generator_router, prefix="/agents",
                    tags=["agent"])  # Include the agent generator router
 app.include_router(hnagent_router, tags=["hackernews"])
 app.include_router(xagent_router, tags=["xagent"])  # Include the xagent router
-
+app.include_router(user_router) # new auth user router
 
 # if __name__ == "__main__":
 #     import uvicorn
