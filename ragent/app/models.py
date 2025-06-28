@@ -14,20 +14,37 @@ class Base(DeclarativeBase):
 # User and Auth Models
 # ------------------------------------------------------------
 
-
 class UserModel(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    email = Column(String, unique=True, index=True)
-    hashed_password = Column(String)
-
+    username = Column(String(150), index=True)
+    email = Column(String(255), unique=True, index=True)
+    hashed_password = Column(String(100))
+    is_active = Column(Boolean, default=False)
+    verified_at = Column(DateTime, nullable=True, default=None)
+    updated_at = Column(DateTime, nullable=True, default=None, onupdate=datetime.now)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    
     projects = relationship("ProjectModel", back_populates="owner")
-
+    tokens = relationship("UserToken", back_populates="user")
+    
+    def get_context_string(self, context: str):
+        # Creating unique string
+        return f"{context}{self.hashed_password[-6:]}{self.updated_at.strftime('%m%d%Y%H%M%S')}".strip()
     # create a unique index on username and email
     __table_args__ = (Index('idx_username_email', "username", "email"),)
 
+class UserToken(Base):
+    __tablename__ = "user_tokens"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id'))
+    access_key = Column(String(250), nullable=True, index=True, default=None)
+    refresh_key = Column(String(250), nullable=True, index=True, default=None)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    expires_at = Column(DateTime, nullable=False)
+
+    user =relationship("UserModel", back_populates="tokens")
 
 # ------------------------------------------------------------
 # Project Model
