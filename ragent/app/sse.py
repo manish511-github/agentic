@@ -3,7 +3,7 @@ from fastapi.responses import StreamingResponse
 from .tasks import add_project_agent_connection, remove_project_agent_connection, send_project_agent_update
 from .models import ProjectModel, AgentModel
 from .database import AsyncSessionLocal
-from .auth import get_current_user
+from .auth3 import get_current_user
 from sqlalchemy import select
 import asyncio
 import json

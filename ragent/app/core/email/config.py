@@ -15,7 +15,7 @@ conf = ConnectionConfig(
     MAIL_DEBUG=True,
     MAIL_FROM=os.environ.get("MAIL_FROM", 'noreply@test.com'),
     MAIL_FROM_NAME=os.environ.get("MAIL_FROM_NAME", settings.APP_NAME),
-    TEMPLATE_FOLDER=Path(__file__).parent.parent / "templates",
+    TEMPLATE_FOLDER=Path(__file__).parent / "templates",
     USE_CREDENTIALS=os.environ.get("USE_CREDENTIALS", False)
 )
 

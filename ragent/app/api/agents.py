@@ -9,7 +9,7 @@ import structlog
 
 from ..database import get_db
 from .. import models, schemas
-from ..auth import get_current_active_user
+from ..auth3 import get_current_active_user
 from app.websocket import manager
 from app.tasks import run_agent  # Import the Celery task
 

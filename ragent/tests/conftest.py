@@ -5,20 +5,44 @@ from typing import Generator
 
 import pytest
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, text
 from starlette.testclient import TestClient
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.main import app
 from app.models import Base, UserModel
-from app.database import sync_engine, get_sync_db
-from app.api.users.security import hash_password
+from app.database import get_sync_db
+from app.auth.security import hash_password
 
 USER_NAME = "Test"
 USER_EMAIL = "test@test.com"
 USER_PASSWORD = "123#DTest"
 
-SessionTesting = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
+# Test database configuration
+TEST_DB_NAME = "test_agent"
+TEST_SYNC_POSTGRES_DSN = f"postgresql+psycopg2://test:test@postgres:5432/{TEST_DB_NAME}"
+
+def create_test_database():
+    """Create test database if it doesn't exist"""
+    # Connect to default postgres database to create test database
+    default_engine = create_engine("postgresql+psycopg2://test:test@postgres:5432/postgres", isolation_level="AUTOCOMMIT")
+    
+    with default_engine.connect() as conn:
+        # Check if test database exists
+        result = conn.execute(text(f"SELECT 1 FROM pg_database WHERE datname = '{TEST_DB_NAME}'"))
+        if not result.fetchone():
+            # Create test database
+            conn.execute(text(f"CREATE DATABASE {TEST_DB_NAME}"))
+    
+    default_engine.dispose()
+
+# Create test database
+create_test_database()
+
+# Create test engine
+test_engine = create_engine(TEST_SYNC_POSTGRES_DSN, echo=False, pool_pre_ping=True)
+SessionTesting = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
 @pytest.fixture(scope="function")
 def test_session() -> Generator:
@@ -30,9 +54,11 @@ def test_session() -> Generator:
 
 @pytest.fixture(scope="function")
 def app_test():
-    Base.metadata.create_all(bind=sync_engine)
+    # Create all tables for testing
+    Base.metadata.create_all(bind=test_engine)
     yield app
-    Base.metadata.drop_all(bind=sync_engine)
+    # Clean up after tests
+    Base.metadata.drop_all(bind=test_engine)
 
 @pytest.fixture(scope="function")
 def client(app_test, test_session):
