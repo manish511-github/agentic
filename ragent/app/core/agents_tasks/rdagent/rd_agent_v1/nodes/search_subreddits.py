@@ -16,26 +16,26 @@ async def search_subreddits_node(state: AgentState) -> AgentState:
     try:
         target_subreddits = {}
         async with await get_reddit_client() as reddit:
-            keywords = state["keywords"]
+            keywords = state["generated_queries"]
             logger.info("Using keywords",
                         agent_name=state["agent_name"], keywords=keywords)
 
-            async def search_keyword(kw):
+            async def search_query_in_subreddit(query):
                 result = {}
                 try:
                     # Honour global Reddit rate-limit
                     async with reddit_limiter:
                         subreddits = reddit.subreddits.search(
-                            kw, limit=settings.posts_per_search)
+                            query, limit=settings.posts_per_search)
                         async for subreddit in subreddits:
                             result[subreddit.display_name] = subreddit.public_description or subreddit.description
                 except Exception as e:
                     logger.warning("Keyword search failed",
-                                   keyword=kw, error=str(e))
+                                   keyword=query, error=str(e))
                 return result
             for i in range(0, len(keywords), settings.embedding_batch_size):
                 batch = keywords[i:i+settings.embedding_batch_size]
-                results = await asyncio.gather(*(search_keyword(kw) for kw in batch))
+                results = await asyncio.gather(*(search_query_in_subreddit(query) for query in batch))
                 for res in results:
                     target_subreddits.update(res)
                 logger.info("Batch processed", batch=batch)
@@ -46,7 +46,7 @@ async def search_subreddits_node(state: AgentState) -> AgentState:
             from langchain.chains import LLMChain
             prompt = PromptTemplate(
                 input_variables=["subreddits", "expectation",
-                                 "description", "target_audience"],
+                                 "description", "target_audience", "keywords", "generated_queries"],
                 template=(
                     "Evaluate these subreddits for relevance to our marketing needs. "
                     "Follow these instructions carefully:\n\n"
@@ -54,6 +54,8 @@ async def search_subreddits_node(state: AgentState) -> AgentState:
                     "- Goals: {expectation}\n"
                     "- Description: {description}\n"
                     "- Target Audience: {target_audience}\n\n"
+                    "- Keywords: {keywords}\n"
+                    "- Generated Queries: {generated_queries}\n\n"
                     "SUBREDDITS TO EVALUATE:\n"
                     "{subreddits}\n\n"
                     "INSTRUCTIONS:\n"
@@ -87,7 +89,9 @@ async def search_subreddits_node(state: AgentState) -> AgentState:
                             subreddits=batch_json,
                             expectation=state["expectation"],
                             description=state["description"],
-                            target_audience=state["target_audience"]
+                            target_audience=state["target_audience"],
+                            keywords=state["keywords"],
+                            generated_queries=state["generated_queries"]
                         )
                         logger.info("Response received", response=response)
                         batch_results = json.loads(response.lower())

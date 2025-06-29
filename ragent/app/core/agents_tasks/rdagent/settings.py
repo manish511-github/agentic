@@ -12,7 +12,9 @@ class RedditAgentSettings(BaseSettings):
     # --- Reddit specific -------------------------------------------------
     # Maximum number of Reddit HTTP requests permitted per minute (free tier)
     reddit_rpm: int = 100
-
+    # The maximum number of subreddits to process in a single batch
+    # This is used when we are fetching posts from subreddits
+    max_subreddits_per_batch: int = 10
     # The maximum number of concurrent producer tasks (subreddit / query fetch)
     max_concurrency: int = 20
 

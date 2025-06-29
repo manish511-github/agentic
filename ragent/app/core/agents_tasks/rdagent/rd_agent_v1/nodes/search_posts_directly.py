@@ -68,7 +68,7 @@ async def process_submission_batch(submissions: list[Submission], current_query:
         keyword_matches = sum(
             1 for kw in search_queries if kw.lower() in content)
         keyword_relevance = min(
-            1.0, keyword_matches / max(1, len(state["company_keywords"])))
+            1.0, keyword_matches / max(1, len(state["keywords"])))
         post_data = {
             "subreddit": submission.subreddit.display_name,
             "post_id": submission.id,
@@ -135,15 +135,14 @@ async def search_posts_directly_node(state: AgentState) -> AgentState:
             "agent_name": state.get("agent_name", ""),
             "goals": state.get("goals", []),
             "instructions": state.get("instructions", ""),
-            "company_keywords": state.get("company_keywords", []),
             "description": state.get("description", ""),
             "target_audience": state.get("target_audience", ""),
             "expectation": state.get("expectation", ""),
             "keywords": state.get("keywords", "")
         }
 
-        # Get search queries
-        search_queries = company_data["keywords"]
+        # Get search queries    
+        search_queries = state.get("generated_queries", [])
 
         # Set up batching
         BATCH_SIZE = settings.qdrant_batch_size
@@ -235,6 +234,7 @@ async def search_posts_directly_node(state: AgentState) -> AgentState:
             {', '.join(search_queries)}
             {company_data['target_audience']}
             {company_data['expectation']}
+            {', '.join(company_data['keywords'])}
             """
             query_embedding = await embedding_model.aembed_query(query_text)
             semantic_results = qdrant_client.search(
@@ -267,4 +267,4 @@ async def search_posts_directly_node(state: AgentState) -> AgentState:
     except Exception as e:
         state["error"] = f"Direct post search failed: {str(e)}"
         logger.error("Direct post search failed", error=str(e))
-    return semantic_posts
+    return state

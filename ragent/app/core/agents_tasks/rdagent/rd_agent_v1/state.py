@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional, TypedDict
+from typing import List, Dict, Optional, TypedDict, Set
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -12,11 +12,13 @@ class AgentState(TypedDict):
     instructions: str
     company_keywords: List[str]
     keywords: Optional[List[str]]
+    generated_queries: Optional[List[str]]
     min_upvotes: int
     max_age_days: int
     restrict_to_goal_subreddits: bool
     subreddits: List[str]
     posts: List[Dict]
+    seen_post_ids: Set[str]
     direct_posts: List[Dict]
     subreddit_posts: List[Dict]
     retries: int
@@ -53,10 +55,14 @@ class RedditAgentInput(BaseModel):
         description="Custom instructions for the agent",
         examples=["Focus on SaaS communities and promote our CRM product."]
     )
-    company_keywords: List[str] = Field(
-        ...,
+    company_keywords: Optional[List[str]] = Field(
+        None,
         description="Keywords related to the company or product",
         examples=[["CRM", "SaaS", "customer management"]]
+    )
+    keywords: List[str] = Field(
+        [],
+        description="Keywords of the agent as provided by the user"
     )
     description: Optional[str] = Field(
         None,
