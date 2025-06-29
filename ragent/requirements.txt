@@ -24,7 +24,6 @@ redis==5.0.0
 structlog==23.1.0
 asyncpraw
 asyncprawcore
-python-multipart
 python-jose[cryptography]==3.3.0  # for JWT support
 passlib[bcrypt]==1.7.4      
 psycopg2-binary==2.9.9 
@@ -67,4 +66,5 @@ pytest-asyncio
 email-validator
 fastapi-mail==1.5.0
 Jinja2==3.1.6
-
+PyJWT==2.10.1
+python-multipart==0.0.20

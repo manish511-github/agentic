@@ -6,7 +6,7 @@ import uuid
 
 from ..database import get_db
 from .. import models, schemas
-from ..auth import get_current_active_user
+from ..auth3 import get_current_active_user
 
 router = APIRouter(
     prefix="/projects",
