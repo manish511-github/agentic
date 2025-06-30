@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Union, Optional
+from typing import Union, Optional, List
 from datetime import datetime
 from app.auth.schemas.base import BaseResponse
 
@@ -32,4 +32,10 @@ class ResetRequest(BaseModel):
     token: str
     email: EmailStr
     password: str
-    
+
+class GoogleUser(BaseModel):
+    sub: int
+    email: str
+    name: str
+    picture: str
+    scope: List[str] = [] 

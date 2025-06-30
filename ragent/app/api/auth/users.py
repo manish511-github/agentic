@@ -17,7 +17,7 @@ user_router = APIRouter(
     prefix="/users",
     tags=["Users"],
     responses={404: {"description": "Not found"}},
-    
+
 )
 auth_router = APIRouter(
     prefix="/users",

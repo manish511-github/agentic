@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     # App Secret Key
     SECRET_KEY: str = os.environ.get("SECRET_KEY", "8deadce9449770680910741063cd0a3fe0acb62a8978661f421bbcbb66dc41f1")
 
+    # Google OAuth
+    GOOGLE_CLIENT_ID: str = os.environ.get("GOOGLE_CLIENT_ID", "")
+    GOOGLE_CLIENT_SECRET: str = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+    print(GOOGLE_CLIENT_SECRET)
+    GOOGLE_REDIRECT_URI: str = os.environ.get("GOOGLE_REDIRECT_URI","http://localhost:8000/auth/callback/google")
+    GSECRET_KEY: str = os.environ.get("GSECRET_KEY","SECRET_KEY=8deadce9449770680910741063cd0a3fe0acb62a8978661f421bbcbb66dc41f1")
+
 
 @lru_cache()
 def get_settings() -> Settings:

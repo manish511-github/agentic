@@ -28,12 +28,28 @@ class UserModel(Base):
     
     projects = relationship("ProjectModel", back_populates="owner")
     tokens = relationship("UserToken", back_populates="user")
+    oauth_accounts = relationship("OAuthAccount", back_populates="user", cascade="all, delete-orphan")
     
     def get_context_string(self, context: str):
         # Creating unique string
         return f"{context}{self.hashed_password[-6:]}{self.updated_at.strftime('%m%d%Y%H%M%S')}".strip()
     # create a unique index on username and email
     __table_args__ = (Index('idx_username_email', "username", "email"),)
+
+class OAuthAccount(Base):
+    __tablename__ = "oauth_accounts"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    provider = Column(String(50), nullable=False)  # e.g., "google"
+    provider_user_id = Column(String(255), nullable=False)  # e.g., Google "sub"
+    access_token = Column(String(512), nullable=True)
+    refresh_token = Column(String(512), nullable=True)
+    token_expiry = Column(DateTime, nullable=True)
+    scope = Column(ARRAY(String), nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now()) 
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now()) 
+
+    user = relationship("UserModel", back_populates="oauth_accounts")
 
 class UserToken(Base):
     __tablename__ = "user_tokens"

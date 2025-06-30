@@ -4,6 +4,7 @@ import redis.asyncio as redis
 import structlog
 import os
 from dotenv import load_dotenv
+from app.settings import get_settings
 from app.agent import router as agent_router
 from app.core.agents_tasks.rdagent.rd_agent_v1.router import router as rdagent_router
 from app.core.agents_tasks.xagent.api_routes import router as xdagent_router
@@ -20,6 +21,10 @@ from app.core.agents_tasks.xagent import router as xagent_router
 from app.api.auth.users import user_router
 from app.api.auth.users import guest_router
 from app.api.auth.users import auth_router
+from app.api.auth.google_auth import google_auth_router
+
+#Auth2 dependency
+from starlette.middleware.sessions import SessionMiddleware
 
 import math
 from fastapi.middleware.cors import CORSMiddleware  # Import CORSMiddleware
@@ -32,6 +37,8 @@ structlog.configure(
         structlog.processors.JSONRenderer()
     ]
 )
+
+settings = get_settings()
 logger = structlog.get_logger()
 
 # Load environment variables
@@ -50,7 +57,7 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
-
+app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
 # Initialize rate limiter
 
 
@@ -78,6 +85,7 @@ app.include_router(xagent_router, tags=["xagent"])  # Include the xagent router
 app.include_router(user_router) # new auth user router
 app.include_router(guest_router)
 app.include_router(auth_router)
+app.include_router(google_auth_router)
 
 
 # if __name__ == "__main__":
