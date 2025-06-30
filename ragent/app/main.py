@@ -23,6 +23,8 @@ from app.api.auth.users import guest_router
 from app.api.auth.users import auth_router
 from app.api.auth.google_auth import google_auth_router
 
+from app.api.auth.reddit_auth import reddit_auth_router
+from app.api.reddit.reddit_post import reddit_post_router
 #Auth2 dependency
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -86,6 +88,9 @@ app.include_router(user_router) # new auth user router
 app.include_router(guest_router)
 app.include_router(auth_router)
 app.include_router(google_auth_router)
+app.include_router(reddit_auth_router)
+#reddit post
+app.include_router(reddit_post_router)
 
 
 # if __name__ == "__main__":
