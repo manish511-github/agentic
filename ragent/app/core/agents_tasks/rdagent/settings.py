@@ -34,6 +34,9 @@ class RedditAgentSettings(BaseSettings):
     llm_batch_size: int = 20           # posts per relevance-scoring prompt
     llm_concurrency: int = 5           # simultaneous LLM calls
 
+    # Maximum number of keywords to combine with OR in a single Reddit search query
+    keyword_batch_size: int = 10       # keywords per OR search query
+
     # --- Misc ------------------------------------------------------------
     max_total_posts: int = 1000        # safety valve to avoid runaway runs
 

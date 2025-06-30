@@ -10,6 +10,7 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from qdrant_client.http.models import VectorParams, Distance, PointStruct
 from ...settings import settings
 from ...utils.rate_limiter import reddit_limiter
+from ...utils.querymaker import create_OR_query_in_batch
 from asyncpraw import Reddit
 from typing import List, Dict
 
@@ -204,10 +205,15 @@ async def process_subreddit(subreddit_name: str, state: AgentState):
                     logger.error(
                         f"Failed to load subreddit {subreddit_name}: {str(e)}")
                     return subreddit_posts
-                search_queries = []
-                for keyword in state["company_keywords"]:
-                    search_queries.append(f'"{keyword}"')
-                    search_queries.append(keyword)
+                # Build batched OR queries from company keywords
+                keyword_batch_size = settings.keyword_batch_size
+                search_queries = list(
+                    create_OR_query_in_batch(
+                        state["keywords"],
+                        keyword_batch_size,
+                        quote=True,
+                    )
+                )
                 logger.info(
                     f"Generated search queries for {subreddit_name}: {search_queries}")
                 for search_query in search_queries:
@@ -226,9 +232,9 @@ async def process_subreddit(subreddit_name: str, state: AgentState):
                                 content = (submission.title + " " +
                                             submission.selftext).lower()
                                 keyword_matches = sum(
-                                    1 for kw in state["company_keywords"] if kw.lower() in content)
+                                    1 for kw in state["keywords"] if kw.lower() in content)
                                 keyword_relevance = min(
-                                    1.0, keyword_matches / max(1, len(state["company_keywords"])))
+                                    1.0, keyword_matches / max(1, len(state["keywords"])))
                                 post_data = {
                                     "subreddit": subreddit_name,
                                     "post_id": submission.id,
@@ -318,7 +324,6 @@ async def process_subreddit_posts(subreddit_posts: List[Dict], state: AgentState
         except Exception as err:
             logger.error(
                 "embedding_or_upsert_failed",
-                subreddit=subreddit_name,
                 error=str(err),
             )
 
@@ -347,7 +352,7 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
         logger.info("Starting fetch_posts_node",
                     agent_name=state["agent_name"],
                     goals=state["goals"],
-                    keywords=state["company_keywords"],
+                    keywords=state["keywords"],
                     subreddits=state["subreddits"])
         
         # Initialize Qdrant client and embedding model
@@ -425,7 +430,7 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
                 query_text = f"""
                 {state['description']}
                 {', '.join(state['goals'])}
-                {', '.join(state['company_keywords'])}
+                {', '.join(state['keywords'])}
                 {state['target_audience']}
                 {state['expectation']}
                 """

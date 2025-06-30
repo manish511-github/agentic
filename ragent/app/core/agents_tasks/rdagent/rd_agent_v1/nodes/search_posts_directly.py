@@ -178,7 +178,7 @@ async def search_posts_directly_node(state: AgentState) -> AgentState:
                     continue
 
                 # Embed the submissions in the Vector DB in batches
-                semaphore = asyncio.Semaphore(10)
+                semaphore = asyncio.Semaphore(EMBEDDING_BATCH_SIZE)
                 
                 async def embed_and_upsert(embedding_batch):
                     texts = [post["text"] for post in embedding_batch]
