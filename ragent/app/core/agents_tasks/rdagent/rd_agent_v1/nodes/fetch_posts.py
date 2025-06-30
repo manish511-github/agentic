@@ -5,11 +5,19 @@ from app.core.vector_db import get_collection_name, get_qdrant_client
 import structlog
 from datetime import datetime
 import asyncio
+from qdrant_client import QdrantClient
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from qdrant_client.http.models import VectorParams, Distance, PointStruct
 from ...settings import settings
 from ...utils.rate_limiter import reddit_limiter
+from ...utils.querymaker import create_OR_query_in_batch
+from asyncpraw import Reddit
+from typing import List, Dict
 
 logger = structlog.get_logger()
+
+# Concurrency guard so we don't spin up an unreasonable number of coroutines.
+semaphore = asyncio.Semaphore(settings.max_concurrency)
 
 
 async def fetch_basic_post_nodes(state: AgentState) -> AgentState:
@@ -120,7 +128,7 @@ async def fetch_basic_post_nodes(state: AgentState) -> AgentState:
                     f"Goals: {', '.join(state['goals'])} (ensure posts support these marketing objectives)\n"
                     f"Expectation: {state['expectation']} (posts should match this content focus)\n"
                     f"Target Audience: {state['target_audience']}\n"
-                    f"Keywords: {', '.join(state['company_keywords'])}\n\n"
+                    f"Keywords: {', '.join(state['keywords'])}\n\n"
                     "Posts:\n" +
                     "\n".join([
                         f"Post {i}: {c['post_title']}\n{c['post_body'][:1000]}"
@@ -178,8 +186,146 @@ async def fetch_basic_post_nodes(state: AgentState) -> AgentState:
             stack_info=True,
             agent_name=state.get("agent_name", "unknown")
         )
-    return posts
+    return state
 
+
+
+async def process_subreddit(subreddit_name: str, state: AgentState):
+    async with await get_reddit_client() as reddit:
+        async with semaphore:
+            subreddit_posts = []
+            try:
+                logger.info(f"Processing subreddit: {subreddit_name}")
+                try:
+                    subreddit = await reddit.subreddit(subreddit_name)
+                    await subreddit.load()
+                    logger.info(
+                        f"Successfully loaded subreddit: {subreddit_name}")
+                except Exception as e:
+                    logger.error(
+                        f"Failed to load subreddit {subreddit_name}: {str(e)}")
+                    return subreddit_posts
+                # Build batched OR queries from company keywords
+                keyword_batch_size = settings.keyword_batch_size
+                search_queries = list(
+                    create_OR_query_in_batch(
+                        state["keywords"],
+                        keyword_batch_size,
+                        quote=True,
+                    )
+                )
+                logger.info(
+                    f"Generated search queries for {subreddit_name}: {search_queries}")
+                for search_query in search_queries:
+                    try:
+                        logger.info(
+                            f"Searching {subreddit_name} with query: {search_query}")
+                        async with reddit_limiter:
+                            async for submission in subreddit.search(
+                                    search_query,
+                                    sort="relevance",
+                                    time_filter="month",
+                                    limit=settings.posts_per_search):
+                                if submission.id in state.get("seen_post_ids"):
+                                    continue
+                                state["seen_post_ids"].add(submission.id)
+                                content = (submission.title + " " +
+                                            submission.selftext).lower()
+                                keyword_matches = sum(
+                                    1 for kw in state["keywords"] if kw.lower() in content)
+                                keyword_relevance = min(
+                                    1.0, keyword_matches / max(1, len(state["keywords"])))
+                                post_data = {
+                                    "subreddit": subreddit_name,
+                                    "post_id": submission.id,
+                                    "post_title": submission.title,
+                                    "post_body": submission.selftext,
+                                    "post_url": f"https://www.reddit.com{submission.permalink}",
+                                    "upvotes": submission.score,
+                                    "comment_count": submission.num_comments,
+                                    "created": datetime.utcfromtimestamp(submission.created_utc).isoformat(),
+                                    "keyword_relevance": keyword_relevance,
+                                    "text": f"{submission.title} {submission.selftext}"
+                                }
+                                subreddit_posts.append(post_data)
+                                logger.info(
+                                    f"Found post in {subreddit_name}: {submission.title}")
+                                # Emit a terse per-post log line
+                                logger.info(
+                                    "embedded_post",
+                                    post_id=post_data["post_id"],
+                                    subreddit=post_data["subreddit"],
+                                )
+                    except Exception as e:
+                        logger.warning(
+                            f"Search failed for query '{search_query}' in {subreddit_name}: {str(e)}")
+                        continue
+                logger.info(
+                    f"Completed processing {subreddit_name} (embedding & persistence)",
+                    posts_found=len(subreddit_posts),
+                )
+
+                # ---------------------------------------------
+                #  Embedding & persistence happen here so that
+                #  IO bound work (Reddit fetch) can overlap with
+                #  CPU / network bound work (embedding + Qdrant).
+                # ---------------------------------------------
+                await process_subreddit_posts(subreddit_posts, state)
+
+                logger.info(
+                    f"Completed processing {subreddit_name}",
+                    posts_found=len(subreddit_posts),
+                    keyword_matches=sum(
+                        1 for p in subreddit_posts if p["keyword_relevance"] > 0),
+                    # Duration omitted for brevity
+                )
+            except Exception as e:
+                logger.error(f"Error processing {subreddit_name}: {str(e)}",
+                                subreddit=subreddit_name,
+                                error=str(e))
+            return subreddit_posts
+        
+async def process_subreddit_posts(subreddit_posts: List[Dict], state: AgentState):
+    embedding_model = get_embedding_model()
+    qdrant_client = get_qdrant_client()
+    collection_name = get_collection_name(state["agent_name"],"rdagent_v1")
+    for idx in range(0, len(subreddit_posts), settings.embedding_batch_size):
+        batch = subreddit_posts[idx: idx +
+                                settings.embedding_batch_size]
+        batch_texts = [p["text"] for p in batch]
+        try:
+            embeddings = await embedding_model.aembed_documents(batch_texts)
+            points = []
+            for post, emb in zip(batch, embeddings):
+                points.append(
+                    PointStruct(
+                        id=abs(hash(post["post_id"])) % (
+                            2**63),
+                        vector=emb,
+                        payload={
+                            "submission_id": post["post_id"],
+                            "title": post["post_title"],
+                            "content": post["post_body"],
+                            "url": post["post_url"],
+                            "created_utc": datetime.fromisoformat(post["created"]).timestamp(),
+                            "subreddit": post["subreddit"],
+                            "score": post["upvotes"],
+                            "num_comments": post["comment_count"],
+                            "keyword_relevance": post["keyword_relevance"],
+                        },
+                    )
+                )
+                # Keep 'text' key for compatibility with downstream logic
+            # Persist the vectors
+            qdrant_client.upsert(
+                collection_name=collection_name,
+                points=points,
+            )
+        except Exception as err:
+            logger.error(
+                "embedding_or_upsert_failed",
+                error=str(err),
+            )
 
 async def fetch_posts_node(state: AgentState) -> AgentState:
     if state.get("error"):
@@ -206,14 +352,23 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
         logger.info("Starting fetch_posts_node",
                     agent_name=state["agent_name"],
                     goals=state["goals"],
-                    keywords=state["company_keywords"],
+                    keywords=state["keywords"],
                     subreddits=state["subreddits"])
+        
+        # Initialize Qdrant client and embedding model
+        try:
+            qdrant_client = get_qdrant_client()
+            embedding_model = get_embedding_model()
+            logger.info("Initialized Qdrant client and embedding model")
 
-        qdrant_client = get_qdrant_client()
-        embedding_model = get_embedding_model()
-        logger.info("Initialized Qdrant client and embedding model")
+            collection_name = get_collection_name(state["agent_name"],"rdagent_v1")
+            # Get Reddit client without context manager to avoid premature session closure
+            reddit = await get_reddit_client()
+        except Exception as e:
+            logger.error(f"Error initializing Qdrant client and embedding model: {str(e)}")
+            raise
 
-        collection_name = get_collection_name(state["agent_name"],"rdagent_v1")
+        # Create collection if it doesn't exist
         try:
             try:
                 qdrant_client.delete_collection(collection_name)
@@ -234,145 +389,11 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
             logger.error(f"Error managing collection: {str(e)}")
             raise
 
-        # Get Reddit client without context manager to avoid premature session closure
-        reddit = await get_reddit_client()
         try:
-            BATCH_SIZE = settings.qdrant_batch_size
-            current_batch = []
+            BATCH_SIZE = settings.max_subreddits_per_batch
             posts = []
-            seen_post_ids = set()
             total_posts_processed = 0
             total_keyword_matches = 0
-
-            # Concurrency guard so we don't spin up an unreasonable number of coroutines.
-            semaphore = asyncio.Semaphore(settings.max_concurrency)
-
-            async def process_subreddit(subreddit_name: str):
-                async with semaphore:
-                    subreddit_posts = []
-                    try:
-                        logger.info(f"Processing subreddit: {subreddit_name}")
-                        try:
-                            subreddit = await reddit.subreddit(subreddit_name)
-                            await subreddit.load()
-                            logger.info(
-                                f"Successfully loaded subreddit: {subreddit_name}")
-                        except Exception as e:
-                            logger.error(
-                                f"Failed to load subreddit {subreddit_name}: {str(e)}")
-                            return subreddit_posts
-                        search_queries = []
-                        for keyword in state["company_keywords"]:
-                            search_queries.append(f'"{keyword}"')
-                            search_queries.append(keyword)
-                        logger.info(
-                            f"Generated search queries for {subreddit_name}: {search_queries}")
-                        for search_query in search_queries:
-                            try:
-                                logger.info(
-                                    f"Searching {subreddit_name} with query: {search_query}")
-                                async with reddit_limiter:
-                                    async for submission in subreddit.search(
-                                            search_query,
-                                            sort="relevance",
-                                            time_filter="month",
-                                            limit=settings.posts_per_search):
-                                        if submission.id in seen_post_ids:
-                                            continue
-                                        seen_post_ids.add(submission.id)
-                                        content = (submission.title + " " +
-                                                   submission.selftext).lower()
-                                        keyword_matches = sum(
-                                            1 for kw in state["company_keywords"] if kw.lower() in content)
-                                        keyword_relevance = min(
-                                            1.0, keyword_matches / max(1, len(state["company_keywords"])))
-                                        post_data = {
-                                            "subreddit": subreddit_name,
-                                            "post_id": submission.id,
-                                            "post_title": submission.title,
-                                            "post_body": submission.selftext,
-                                            "post_url": f"https://www.reddit.com{submission.permalink}",
-                                            "upvotes": submission.score,
-                                            "comment_count": submission.num_comments,
-                                            "created": datetime.utcfromtimestamp(submission.created_utc).isoformat(),
-                                            "keyword_relevance": keyword_relevance,
-                                            "text": f"{submission.title} {submission.selftext}"
-                                        }
-                                        subreddit_posts.append(post_data)
-                                        logger.info(
-                                            f"Found post in {subreddit_name}: {submission.title}")
-                                        # Emit a terse per-post log line
-                                        logger.info(
-                                            "embedded_post",
-                                            post_id=post_data["post_id"],
-                                            subreddit=post_data["subreddit"],
-                                        )
-                            except Exception as e:
-                                logger.warning(
-                                    f"Search failed for query '{search_query}' in {subreddit_name}: {str(e)}")
-                                continue
-                        logger.info(
-                            f"Completed processing {subreddit_name} (embedding & persistence)",
-                            posts_found=len(subreddit_posts),
-                        )
-
-                        # ---------------------------------------------
-                        #  Embedding & persistence happen here so that
-                        #  IO bound work (Reddit fetch) can overlap with
-                        #  CPU / network bound work (embedding + Qdrant).
-                        # ---------------------------------------------
-                        if subreddit_posts:
-                            for idx in range(0, len(subreddit_posts), settings.embedding_batch_size):
-                                batch = subreddit_posts[idx: idx +
-                                                        settings.embedding_batch_size]
-                                batch_texts = [p["text"] for p in batch]
-                                try:
-                                    embeddings = await embedding_model.aembed_documents(batch_texts)
-                                    points = []
-                                    for post, emb in zip(batch, embeddings):
-                                        points.append(
-                                            PointStruct(
-                                                id=abs(hash(post["post_id"])) % (
-                                                    2**63),
-                                                vector=emb,
-                                                payload={
-                                                    "submission_id": post["post_id"],
-                                                    "title": post["post_title"],
-                                                    "content": post["post_body"],
-                                                    "url": post["post_url"],
-                                                    "created_utc": datetime.fromisoformat(post["created"]).timestamp(),
-                                                    "subreddit": post["subreddit"],
-                                                    "score": post["upvotes"],
-                                                    "num_comments": post["comment_count"],
-                                                    "keyword_relevance": post["keyword_relevance"],
-                                                },
-                                            )
-                                        )
-                                        # Keep 'text' key for compatibility with downstream logic
-                                    # Persist the vectors
-                                    qdrant_client.upsert(
-                                        collection_name=collection_name,
-                                        points=points,
-                                    )
-                                except Exception as err:
-                                    logger.error(
-                                        "embedding_or_upsert_failed",
-                                        subreddit=subreddit_name,
-                                        error=str(err),
-                                    )
-
-                        logger.info(
-                            f"Completed processing {subreddit_name}",
-                            posts_found=len(subreddit_posts),
-                            keyword_matches=sum(
-                                1 for p in subreddit_posts if p["keyword_relevance"] > 0),
-                            # Duration omitted for brevity
-                        )
-                    except Exception as e:
-                        logger.error(f"Error processing {subreddit_name}: {str(e)}",
-                                     subreddit=subreddit_name,
-                                     error=str(e))
-                    return subreddit_posts
 
             # ---------------- Batch over subreddits ----------------
             for i in range(0, len(state["subreddits"]), BATCH_SIZE):
@@ -385,7 +406,7 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
                 )
                 try:
                     results = await asyncio.gather(
-                        *(process_subreddit(name) for name in batch),
+                        *(process_subreddit(name, state) for name in batch),
                         return_exceptions=True,
                     )
                     for result in results:
@@ -404,52 +425,12 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
                 except Exception as e:
                     logger.error(f"Error processing batch: {str(e)}")
                     continue
-
-            # Skip legacy embedding generation (handled via streaming)
-            if False:
-                logger.info("Starting embedding generation and storage",
-                            total_posts=len(posts),
-                            batch_size=BATCH_SIZE)
-                for i in range(0, len(posts), BATCH_SIZE):
-                    batch_posts = posts[i:i + BATCH_SIZE]
-                    batch_start_time = datetime.utcnow()
-                    texts = [post["text"] for post in batch_posts]
-                    try:
-                        embeddings = await embedding_model.aembed_documents(texts)
-                        points = []
-                        for post, embedding in zip(batch_posts, embeddings):
-                            points.append(PointStruct(
-                                id=abs(hash(post["post_id"])) % (2**63),
-                                vector=embedding,
-                                payload={
-                                    "submission_id": post["post_id"],
-                                    "title": post["post_title"],
-                                    "content": post["post_body"],
-                                    "url": post["post_url"],
-                                    "created_utc": datetime.fromisoformat(post["created"]).timestamp(),
-                                    "subreddit": post["subreddit"],
-                                    "score": post["upvotes"],
-                                    "num_comments": post["comment_count"],
-                                    "keyword_relevance": post["keyword_relevance"]
-                                }
-                            ))
-                        qdrant_client.upsert(
-                            collection_name=collection_name,
-                            points=points
-                        )
-                        logger.info(f"Stored batch {i//BATCH_SIZE + 1} in Qdrant",
-                                    posts_in_batch=len(batch_posts),
-                                    duration_sec=(datetime.utcnow() - batch_start_time).total_seconds())
-                    except Exception as e:
-                        logger.error(f"Error processing batch {i//BATCH_SIZE + 1}: {str(e)}",
-                                     batch_index=i//BATCH_SIZE + 1,
-                                     error=str(e))
             try:
                 logger.info("Starting semantic search")
                 query_text = f"""
                 {state['description']}
                 {', '.join(state['goals'])}
-                {', '.join(state['company_keywords'])}
+                {', '.join(state['keywords'])}
                 {state['target_audience']}
                 {state['expectation']}
                 """

@@ -29,7 +29,7 @@ async def generate_queries_node(state):
             "agent_name": state.get("agent_name", ""),
             "goals": state.get("goals", []),
             "instructions": state.get("instructions", ""),
-            "company_keywords": state.get("company_keywords", []),
+            "keywords": state.get("keywords", []),  
             "description": state.get("description", ""),
             "target_audience": state.get("target_audience", ""),
             "expectation": state.get("expectation", "")
@@ -44,7 +44,7 @@ async def generate_queries_node(state):
         Company Information:
         - Name: {company_data['agent_name']}
         - Goals: {', '.join(company_data['goals'])}
-        - Keywords: {', '.join(company_data['company_keywords'])}
+        - Keywords: {', '.join(company_data['keywords'])}
         - Description: {company_data['description']}
         - Target Audience: {company_data['target_audience']}
         - Expected Content: {company_data['expectation']}
@@ -104,12 +104,12 @@ async def generate_queries_node(state):
                 raise ValueError("LLM did not return a list")
         except Exception as e:
             logger.error("Failed to parse LLM query response as JSON", error=str(e), response=raw)
-            queries = company_data['company_keywords']
+            queries = company_data['keywords']
             
         # Keep company keywords also in the queries
-        queries = list(set(queries + company_data['company_keywords']))
+        queries = list(set(queries + company_data['keywords']))
         queries = [q for q in queries if len(q) <= 50]
-        state["keywords"] = queries
+        state["generated_queries"] = queries
         logger.info("Generated search queries using LLM", agent_name=state.get("agent_name", ""), queries=queries)
         
     except Exception as e:

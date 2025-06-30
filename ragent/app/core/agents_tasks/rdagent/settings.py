@@ -12,7 +12,9 @@ class RedditAgentSettings(BaseSettings):
     # --- Reddit specific -------------------------------------------------
     # Maximum number of Reddit HTTP requests permitted per minute (free tier)
     reddit_rpm: int = 100
-
+    # The maximum number of subreddits to process in a single batch
+    # This is used when we are fetching posts from subreddits
+    max_subreddits_per_batch: int = 10
     # The maximum number of concurrent producer tasks (subreddit / query fetch)
     max_concurrency: int = 20
 
@@ -31,6 +33,9 @@ class RedditAgentSettings(BaseSettings):
     # --- LLM invocation --------------------------------------------------
     llm_batch_size: int = 20           # posts per relevance-scoring prompt
     llm_concurrency: int = 5           # simultaneous LLM calls
+
+    # Maximum number of keywords to combine with OR in a single Reddit search query
+    keyword_batch_size: int = 10       # keywords per OR search query
 
     # --- Misc ------------------------------------------------------------
     max_total_posts: int = 1000        # safety valve to avoid runaway runs

@@ -1,6 +1,8 @@
 import asyncpraw
 import os
+from dotenv import load_dotenv
 
+load_dotenv()
 
 async def get_reddit_client():
     reddit = asyncpraw.Reddit(
