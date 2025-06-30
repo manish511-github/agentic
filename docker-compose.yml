@@ -1,5 +1,6 @@
 version: "3.8"
 services:
+
   ragent:
     build:
       context: ./ragent
@@ -10,23 +11,8 @@ services:
       - ./ragent:/app
       - twitter_cookies:/app/cookies
       - sentence_transformer_cache:/app/model_cache
-    environment:
-      - POSTGRES_DSN=${POSTGRES_DSN}
-      - SYNC_POSTGRES_DSN=${SYNC_POSTGRES_DSN}
-      - REDIS_URL=${REDIS_URL}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
-      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
-      - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
-      - REDDIT_USERNAME=${REDDIT_USERNAME}
-      - REDDIT_PASSWORD=${REDDIT_PASSWORD}
-      - TWITTER_USERNAME=${TWITTER_USERNAME}
-      - TWITTER_EMAIL=${TWITTER_EMAIL}
-      - TWITTER_PASSWORD=${TWITTER_PASSWORD}
-      - TAVILY_API_KEY=${TAVILY_API_KEY}
-      - EXA_API_KEY=${EXA_API_KEY}
-      - QDRANT_URL=http://qdrant:6333
-      - QDRANT_API_KEY=${QDRANT_API_KEY}
+    env_file:
+      - .env
     depends_on:
       postgres:
         condition: service_healthy
