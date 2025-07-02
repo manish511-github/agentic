@@ -2,6 +2,7 @@ from ..state import AgentState
 from ..reddit_client import get_reddit_client
 from app.core.llm_client import get_embedding_model, get_llm
 from app.core.vector_db import get_collection_name, get_qdrant_client
+from ...schemas import RedditPost
 import structlog
 from datetime import datetime
 import asyncio
@@ -51,19 +52,12 @@ async def fetch_basic_post_nodes(state: AgentState) -> AgentState:
                                 if submission.id in seen_post_ids:
                                     continue
                                 seen_post_ids.add(submission.id)
-                                post_data = {
-                                    "subreddit": subreddit_name,
-                                    "post_id": submission.id,
-                                    "post_title": submission.title,
-                                    "post_body": submission.selftext,
-                                    "post_url": f"https://www.reddit.com{submission.permalink}",
-                                    "upvotes": submission.score,
-                                    "comment_count": submission.num_comments,
-                                    "created": datetime.utcfromtimestamp(submission.created_utc).isoformat(),
-                                    "sort_method": sort_method,
-                                    "text": f"{submission.title} {submission.selftext}"
-                                }
-                                sub_posts.append(post_data)
+                                post = RedditPost.from_reddit_submission(
+                                    submission=submission,
+                                    subreddit_name=subreddit_name,
+                                    sort_method=sort_method
+                                )
+                                sub_posts.append(post)
                     except Exception as e:
                         logger.warning(
                             f"Failed to fetch posts from {sort_method} in {subreddit_name}: {str(e)}")
@@ -131,7 +125,7 @@ async def fetch_basic_post_nodes(state: AgentState) -> AgentState:
                     f"Keywords: {', '.join(state['keywords'])}\n\n"
                     "Posts:\n" +
                     "\n".join([
-                        f"Post {i}: {c['post_title']}\n{c['post_body'][:1000]}"
+                        f"Post {i}: {c.post_title}\n{c.post_body[:1000]}"
                         for i, c in enumerate(batch, 1)
                     ]) +
                     f"\n\nOUTPUT REQUIREMENTS:\n"
@@ -175,7 +169,7 @@ async def fetch_basic_post_nodes(state: AgentState) -> AgentState:
             for scores in batch_results:
                 all_scores.extend(scores)
             for post, score in zip(posts, all_scores):
-                post["llm_relevance"] = score
+                post.llm_relevance = score
             logger.info("Fetch posts completed", agent_name=state["agent_name"], posts_count=(posts))
             state["subreddit_posts"] = posts
     except Exception as e:
@@ -235,26 +229,19 @@ async def process_subreddit(subreddit_name: str, state: AgentState):
                                     1 for kw in state["keywords"] if kw.lower() in content)
                                 keyword_relevance = min(
                                     1.0, keyword_matches / max(1, len(state["keywords"])))
-                                post_data = {
-                                    "subreddit": subreddit_name,
-                                    "post_id": submission.id,
-                                    "post_title": submission.title,
-                                    "post_body": submission.selftext,
-                                    "post_url": f"https://www.reddit.com{submission.permalink}",
-                                    "upvotes": submission.score,
-                                    "comment_count": submission.num_comments,
-                                    "created": datetime.utcfromtimestamp(submission.created_utc).isoformat(),
-                                    "keyword_relevance": keyword_relevance,
-                                    "text": f"{submission.title} {submission.selftext}"
-                                }
-                                subreddit_posts.append(post_data)
+                                post = RedditPost.from_reddit_submission(
+                                    submission=submission,
+                                    subreddit_name=subreddit_name,
+                                    keyword_relevance=keyword_relevance
+                                )
+                                subreddit_posts.append(post)
                                 logger.info(
                                     f"Found post in {subreddit_name}: {submission.title}")
                                 # Emit a terse per-post log line
                                 logger.info(
                                     "embedded_post",
-                                    post_id=post_data["post_id"],
-                                    subreddit=post_data["subreddit"],
+                                    post_id=post.post_id,
+                                    subreddit=post.subreddit,
                                 )
                     except Exception as e:
                         logger.warning(
@@ -285,37 +272,26 @@ async def process_subreddit(subreddit_name: str, state: AgentState):
                                 error=str(e))
             return subreddit_posts
         
-async def process_subreddit_posts(subreddit_posts: List[Dict], state: AgentState):
+async def process_subreddit_posts(subreddit_posts: List[RedditPost], state: AgentState):
     embedding_model = get_embedding_model()
     qdrant_client = get_qdrant_client()
     collection_name = get_collection_name(state["agent_name"],"rdagent_v1")
     for idx in range(0, len(subreddit_posts), settings.embedding_batch_size):
         batch = subreddit_posts[idx: idx +
                                 settings.embedding_batch_size]
-        batch_texts = [p["text"] for p in batch]
+        batch_texts = [p.text for p in batch]
         try:
             embeddings = await embedding_model.aembed_documents(batch_texts)
             points = []
             for post, emb in zip(batch, embeddings):
                 points.append(
                     PointStruct(
-                        id=abs(hash(post["post_id"])) % (
+                        id=abs(hash(post.post_id)) % (
                             2**63),
                         vector=emb,
-                        payload={
-                            "submission_id": post["post_id"],
-                            "title": post["post_title"],
-                            "content": post["post_body"],
-                            "url": post["post_url"],
-                            "created_utc": datetime.fromisoformat(post["created"]).timestamp(),
-                            "subreddit": post["subreddit"],
-                            "score": post["upvotes"],
-                            "num_comments": post["comment_count"],
-                            "keyword_relevance": post["keyword_relevance"],
-                        },
+                        payload=post.to_vector_payload(),
                     )
                 )
-                # Keep 'text' key for compatibility with downstream logic
             # Persist the vectors
             qdrant_client.upsert(
                 collection_name=collection_name,
@@ -441,37 +417,37 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
                     limit=100,
                     score_threshold=0.5
                 )
-                post_dict = {post["post_id"]: post for post in posts}
+                post_dict = {post.post_id: post for post in posts}
                 semantic_posts = []
                 for result in semantic_results:
                     post_id = result.payload["submission_id"]
                     if post_id in post_dict:
                         post = post_dict[post_id]
-                        post["semantic_relevance"] = result.score
-                        post["combined_relevance"] = (
+                        post.semantic_relevance = result.score
+                        post.combined_relevance = (
                             0.8 * result.score +
-                            0.2 * post["keyword_relevance"]
+                            0.2 * post.keyword_relevance
                         )
                         semantic_posts.append(post)
                 semantic_posts.sort(
-                    key=lambda x: x["combined_relevance"], reverse=True)
+                    key=lambda x: x.combined_relevance, reverse=True)
                 if state.get("posts"):
-                    existing_post_ids = {post["post_id"]
+                    existing_post_ids = {post.post_id
                                          for post in state["posts"]}
                     new_posts = [
-                        post for post in semantic_posts if post["post_id"] not in existing_post_ids]
+                        post for post in semantic_posts if post.post_id not in existing_post_ids]
                     state["posts"].extend(new_posts)
                 else:
                     state["posts"] = semantic_posts
                 logger.info("Semantic search completed",
                             total_posts=len(semantic_posts),
-                            avg_semantic_score=sum(p["semantic_relevance"] for p in semantic_posts) / len(semantic_posts) if semantic_posts else 0)
+                            avg_semantic_score=sum(p.semantic_relevance for p in semantic_posts) / len(semantic_posts) if semantic_posts else 0)
             except Exception as e:
                 logger.error(f"Semantic search failed: {str(e)}",
                              error=str(e))
                 state["posts"] = sorted(
                     posts,
-                    key=lambda x: (x["keyword_relevance"], x["upvotes"]),
+                    key=lambda x: (x.keyword_relevance, x.upvotes),
                     reverse=True
                 )
                 logger.info("Falling back to keyword-based sorting",

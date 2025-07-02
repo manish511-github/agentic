@@ -2,6 +2,7 @@ from ..state import AgentState
 from ..reddit_client import get_reddit_client
 from app.core.llm_client import get_llm, get_embedding_model
 from app.core.vector_db import get_qdrant_client
+from ...schemas import RedditPost
 import structlog
 import json
 from datetime import datetime
@@ -10,6 +11,7 @@ from qdrant_client.http.models import VectorParams, Distance, PointStruct
 from ...settings import settings
 from ...utils.rate_limiter import reddit_limiter
 from asyncpraw.models import SubredditHelper, Submission
+import time
 
 logger = structlog.get_logger()
 
@@ -23,42 +25,80 @@ async def safe_gemini_call(llm, prompt):
         raise
 
 
-async def delete_collection(collection_name):
+async def delete_collection_with_retry(collection_name, max_retries=3):
     """
-    Delete an existing collection in Qdrant
+    Delete an existing collection in Qdrant with retry logic
     """
-    qdrant_client = get_qdrant_client()
-    try:
-        qdrant_client.delete_collection(collection_name)
-        logger.info(f"Deleted existing collection {collection_name}")
-    except Exception as e:
-        if "not found" not in str(e).lower():
-            logger.error(f"Error deleting collection: {str(e)}")
-            raise
+    for attempt in range(max_retries):
+        try:
+            qdrant_client = get_qdrant_client()
+            qdrant_client.delete_collection(collection_name)
+            logger.info(f"Deleted existing collection {collection_name}")
+            return
+        except Exception as e:
+            if "not found" in str(e).lower():
+                logger.info(f"Collection {collection_name} not found, skipping deletion")
+                return
+            
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # Exponential backoff
+                logger.warning(f"Failed to delete collection (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {wait_time}s...")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"Error deleting collection after {max_retries} attempts: {str(e)}")
+                raise
 
 
-async def create_collection(collection_name):
+async def create_collection_with_retry(collection_name, max_retries=3):
     """
-    Create a new collection in Qdrant
+    Create a new collection in Qdrant with retry logic
     """
-    qdrant_client = get_qdrant_client()
-    try:
-        # Specify the vector size according to your embedding model (default: 768)
-        VECTOR_SIZE = 768
-        qdrant_client.create_collection(
-            collection_name=collection_name,
-            vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE)
-        )
-        logger.info(f"Created new collection {collection_name}")
-    except Exception as e:
-        logger.error(f"Error creating collection: {str(e)}")
+    for attempt in range(max_retries):
+        try:
+            qdrant_client = get_qdrant_client()
+            # Specify the vector size according to your embedding model (default: 768)
+            VECTOR_SIZE = 768
+            qdrant_client.create_collection(
+                collection_name=collection_name,
+                vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE)
+            )
+            logger.info(f"Created new collection {collection_name}")
+            return
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # Exponential backoff
+                logger.warning(f"Failed to create collection (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {wait_time}s...")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"Error creating collection after {max_retries} attempts: {str(e)}")
+                raise
+
+
+async def test_qdrant_connection(max_retries=3):
+    """
+    Test Qdrant connection with retry logic
+    """
+    for attempt in range(max_retries):
+        try:
+            qdrant_client = get_qdrant_client()
+            qdrant_client.get_collections()
+            logger.info("Qdrant connection test successful")
+            return True
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # Exponential backoff
+                logger.warning(f"Qdrant connection test failed (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {wait_time}s...")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"Qdrant connection failed after {max_retries} attempts: {str(e)}")
+                raise
 
 
 async def process_submission_batch(submissions: list[Submission], current_query: str, seen_post_ids: set[str], search_queries: list[str], state: AgentState):
     """
     Process a batch of submissions and return a list of posts
     """
-    tasks: list[dict] = []
+    posts: list[RedditPost] = []
     for submission in submissions:
         if submission.id in seen_post_ids:
             continue
@@ -69,21 +109,15 @@ async def process_submission_batch(submissions: list[Submission], current_query:
             1 for kw in search_queries if kw.lower() in content)
         keyword_relevance = min(
             1.0, keyword_matches / max(1, len(state["keywords"])))
-        post_data = {
-            "subreddit": submission.subreddit.display_name,
-            "post_id": submission.id,
-            "post_title": submission.title,
-            "post_body": submission.selftext,
-            "post_url": f"https://www.reddit.com{submission.permalink}",
-            "upvotes": submission.score,
-            "comment_count": submission.num_comments,
-            "created": datetime.utcfromtimestamp(submission.created_utc).isoformat(),
-            "keyword_relevance": keyword_relevance,
-            "matched_query": current_query,
-            "text": f"{submission.selftext}"
-        }
-        tasks.append(post_data)
-    return tasks
+        
+        post = RedditPost.from_reddit_submission(
+            submission=submission,
+            subreddit_name=submission.subreddit.display_name,
+            keyword_relevance=keyword_relevance,
+            matched_query=current_query
+        )
+        posts.append(post)
+    return posts
 
 
 async def process_query(query: str, all_subreddit: SubredditHelper):
@@ -116,16 +150,19 @@ async def search_posts_directly_node(state: AgentState) -> AgentState:
         return state
 
     try:
+        # Test Qdrant connection first
+        await test_qdrant_connection()
+        
         reddit = await get_reddit_client()
         llm = get_llm()
         qdrant_client = get_qdrant_client()
         embedding_model = get_embedding_model()
         collection_name = "reddit_posts"
 
-        # Delete and create collection
+        # Delete and create collection with retry logic
         try:
-            await delete_collection(collection_name)
-            await create_collection(collection_name)
+            await delete_collection_with_retry(collection_name)
+            await create_collection_with_retry(collection_name)
         except Exception as e:
             logger.error(f"Error managing collection: {str(e)}")
             raise Exception(f"Error managing collection: {str(e)}")
@@ -181,7 +218,7 @@ async def search_posts_directly_node(state: AgentState) -> AgentState:
                 semaphore = asyncio.Semaphore(EMBEDDING_BATCH_SIZE)
                 
                 async def embed_and_upsert(embedding_batch):
-                    texts = [post["text"] for post in embedding_batch]
+                    texts = [post.text for post in embedding_batch]
                     async with semaphore:
                         embeddings = await generate_embeddings_batch(texts)
                         batch_points = []
@@ -190,21 +227,10 @@ async def search_posts_directly_node(state: AgentState) -> AgentState:
                             if embedding is None:
                                 continue
                             batch_points.append(PointStruct(
-                                id=abs(hash(post["post_id"])) % (2**63),
+                                id=abs(hash(post.post_id)) % (2**63),
                                 vector=embedding,
-                                payload={
-                                    "submission_id": post["post_id"],
-                                    "title": post["post_title"],
-                                    "content": post["post_body"],
-                                    "url": post["post_url"],
-                                    "created_utc": datetime.fromisoformat(post["created"]).timestamp(),
-                                    "subreddit": post["subreddit"],
-                                    "score": post["upvotes"],
-                                    "num_comments": post["comment_count"],
-                                    "keyword_relevance": post["keyword_relevance"]
-                                }
+                                payload=post.to_vector_payload()
                             ))
-                            post.pop("text", None)
                             batch_posts.append(post)
                         if batch_points:
                             try:
@@ -243,28 +269,30 @@ async def search_posts_directly_node(state: AgentState) -> AgentState:
                 limit=100,
                 score_threshold=0.5
             )
-            post_dict = {post["post_id"]: post for post in posts}
+            post_dict = {post.post_id: post for post in posts}
             semantic_posts = []
             for result in semantic_results:
                 post_id = result.payload["submission_id"]
                 if post_id in post_dict:
                     post = post_dict[post_id]
-                    post["semantic_relevance"] = result.score
-                    post["combined_relevance"] = (
+                    # Update the post object with semantic relevance scores
+                    post.semantic_relevance = result.score
+                    post.combined_relevance = (
                         0.8 * result.score +
-                        0.2 * post["keyword_relevance"]
+                        0.2 * post.keyword_relevance
                     )
                     semantic_posts.append(post)
             semantic_posts.sort(
-                key=lambda x: x["combined_relevance"], reverse=True)
+                key=lambda x: x.combined_relevance, reverse=True)
         except Exception as e:
             logger.error(f"Semantic search failed: {str(e)}")
             posts.sort(key=lambda x: (
-                x["keyword_relevance"], x["upvotes"]), reverse=True)
+                x.keyword_relevance, x.upvotes), reverse=True)
         state["direct_posts"] = semantic_posts
         logger.info("Direct post search completed with semantic ranking", agent_name=state["agent_name"], posts_found=len(
             state["posts"]), unique_queries_used=search_queries)
     except Exception as e:
+        print(e)
         state["error"] = f"Direct post search failed: {str(e)}"
-        logger.error("Direct post search failed", error=str(e))
+        logger.error("Direct post search failed", error=e)
     return state

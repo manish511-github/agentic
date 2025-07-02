@@ -37,7 +37,7 @@ async def search_subreddits_node(state: AgentState) -> AgentState:
         for i in range(0, len(keywords), settings.embedding_batch_size):
             batch = keywords[i:i+settings.embedding_batch_size]
             results = await asyncio.gather(*(search_query_in_subreddit(query) for query in batch))
-            logger.info("Results for searching subreddits for keywords: {batch}", batch=batch, results=results)
+            logger.info("Results for searching subreddits for keywords: {batch}", batch=batch, results=len(results))
             for res in results:
                 target_subreddits.update(res)
             logger.info("Batch processed", batch=batch)

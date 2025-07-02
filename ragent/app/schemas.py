@@ -15,8 +15,7 @@ class User(BaseModel):
     username: str
     email: str
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
 
 class Token(BaseModel):
@@ -54,8 +53,7 @@ class Project(ProjectBase):
     owner_id: int
     created_at: datetime
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
 
 class RedditPost(BaseModel):
@@ -70,8 +68,7 @@ class RedditPost(BaseModel):
     status: Optional[str] = None
     created_at: str
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
 
 class ScheduleTypeEnum(str, enum.Enum):
@@ -185,5 +182,4 @@ class AgentResult(BaseModel):
     error: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}

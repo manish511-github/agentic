@@ -2,9 +2,15 @@ from typing import List, Dict, Optional, TypedDict, Set
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_google_genai import ChatGoogleGenerativeAI
+from app.schemas import AgentPlatformEnum
+from ..schemas import RedditPost
 
 class AgentState(TypedDict):
     agent_name: str
+    agent_id: int               # agent id from agents table
+    agent_platform: AgentPlatformEnum         # reddit, twitter, linkedin
+    project_id: str             # project id from projects table
+    execution_id: int           # execution id from executions table
     goals: List[str]
     description: str
     expectation: str
@@ -17,31 +23,22 @@ class AgentState(TypedDict):
     max_age_days: int
     restrict_to_goal_subreddits: bool
     subreddits: List[str]
-    posts: List[Dict]
+    posts: List[RedditPost]
     seen_post_ids: Set[str]
-    direct_posts: List[Dict]
-    subreddit_posts: List[Dict]
+    direct_posts: List[RedditPost]
+    subreddit_posts: List[RedditPost]
     retries: int
     error: Optional[str]
     db: Optional[AsyncSession]
     llm: Optional[ChatGoogleGenerativeAI]
-
-class RedditPost(BaseModel):
-    subreddit: str
-    post_id: str
-    post_title: str
-    post_body: str
-    post_url: str
-    relevance_score: float
-    sentiment_score: float
 
 class RedditAgentOutput(BaseModel):
     agent_name: str
     goals: List[str]
     instructions: str
     posts: List[RedditPost]
-    direct_posts: List[Dict]
-    subreddit_posts: List[Dict]
+    direct_posts: List[RedditPost]
+    subreddit_posts: List[RedditPost]
 
 class RedditAgentInput(BaseModel):
     agent_name: str = Field(..., min_length=1, description="Name of the marketing agent")

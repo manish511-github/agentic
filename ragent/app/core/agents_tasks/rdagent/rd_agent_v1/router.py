@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi_limiter.depends import RateLimiter
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.schemas import AgentPlatformEnum
 from .state import RedditAgentInput, AgentState
 from .graph import reddit_graph, parallel_reddit_graph, basic_redit_agent, parallel_advanced_reddit_graph
 from app.database import get_db
@@ -14,6 +15,10 @@ async def run_reddit_agent(input: RedditAgentInput, db: AsyncSession = Depends(g
     try:
         initial_state = AgentState(
             agent_name=input.agent_name,
+            agent_id=1,               # agent id from agents table
+            agent_platform=AgentPlatformEnum.reddit,         # reddit, twitter, linkedin
+            project_id="1",             # project id from projects table
+            execution_id=1, 
             goals=input.goals,
             instructions=input.instructions,
             description=input.description,
@@ -50,6 +55,10 @@ async def run_advanced_reddit_agent(input: RedditAgentInput, db: AsyncSession = 
     try:
         initial_state = AgentState(
             agent_name=input.agent_name,
+            agent_id=1,               
+            agent_platform=AgentPlatformEnum.reddit, 
+            project_id="1",             
+            execution_id=1, 
             goals=input.goals,
             instructions=input.instructions,
             description=input.description,

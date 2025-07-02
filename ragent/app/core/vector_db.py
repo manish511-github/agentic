@@ -4,7 +4,7 @@ from qdrant_client import QdrantClient
 
 logger = structlog.get_logger()
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
 _qdrant_client = None
@@ -20,11 +20,20 @@ def get_qdrant_client() -> QdrantClient:
     global _qdrant_client
     if _qdrant_client is None:
         try:
-            _qdrant_client = QdrantClient(
-                url=QDRANT_URL,
-                api_key=QDRANT_API_KEY
-            )
-            logger.info(f"Initialized Qdrant client with URL: {QDRANT_URL}")
+            # Only pass api_key if it's not None or empty
+            client_kwargs = {"url": QDRANT_URL}
+            if QDRANT_API_KEY and QDRANT_API_KEY.strip():
+                client_kwargs["api_key"] = QDRANT_API_KEY
+                logger.info(f"Initializing Qdrant client with URL: {QDRANT_URL} and API key")
+            else:
+                logger.info(f"Initializing Qdrant client with URL: {QDRANT_URL} (no API key)")
+            
+            _qdrant_client = QdrantClient(**client_kwargs)
+            
+            # Test the connection
+            _qdrant_client.get_collections()
+            logger.info("Qdrant client initialized and connection tested successfully")
+            
         except Exception as e:
             logger.error(f"Failed to initialize Qdrant client: {e}")
             raise
