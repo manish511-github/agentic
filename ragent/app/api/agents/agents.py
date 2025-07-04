@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 from pydantic import ValidationError
 import structlog
 
-from ..database import get_db
-from .. import models, schemas
-from ..auth3 import get_current_active_user
+from ...database import get_db
+from ... import models, schemas
+from app.auth.security import get_current_user, get_jwt_identity
 from app.websocket import manager
 from app.tasks import run_agent  # Import the Celery task
 
@@ -61,7 +61,7 @@ def validate_uuid(uuid_str: str) -> bool:
 async def create_agent(
     agent_data: schemas.AgentCreate,  # Accept raw dictionary
     db: AsyncSession = Depends(get_db),
-    current_user: models.UserModel = Depends(get_current_active_user)
+    current_user: models.UserModel = Depends(get_current_user)
 ):
     # Ensure agent_platform is present
     agent_platform = agent_data.agent_platform
@@ -159,7 +159,7 @@ async def create_agent(
 async def get_agent(
     agent_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: models.UserModel = Depends(get_current_active_user)
+    current_user: models.UserModel = Depends(get_current_user)
 ):
     # Get agent and verify project ownership
     result = await db.execute(
@@ -184,7 +184,7 @@ async def get_agent(
 async def get_project_agents(
     project_uuid: str,
     db: AsyncSession = Depends(get_db),
-    current_user: models.UserModel = Depends(get_current_active_user)
+    current_user: models.UserModel = Depends(get_current_user)
 ):
     # Validate UUID format
     if not validate_uuid(project_uuid):
@@ -222,7 +222,7 @@ async def update_agent(
     agent_id: int,
     agent_update: schemas.AgentBase,
     db: AsyncSession = Depends(get_db),
-    current_user: models.UserModel = Depends(get_current_active_user)
+    current_user: models.UserModel = Depends(get_current_user)
 ):
     # Get agent and verify project ownership
     result = await db.execute(
@@ -254,7 +254,7 @@ async def update_agent(
 async def delete_agent(
     agent_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: models.UserModel = Depends(get_current_active_user)
+    current_user: models.UserModel = Depends(get_current_user)
 ):
     # Get agent and verify project ownership
     result = await db.execute(
@@ -293,7 +293,7 @@ async def websocket_endpoint(websocket: WebSocket, project_id: int):
 async def get_agent_results(
     agent_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: models.UserModel = Depends(get_current_active_user)
+    current_user: models.UserModel = Depends(get_current_user)
 ):
     # Get agent and verify project ownership
     result = await db.execute(

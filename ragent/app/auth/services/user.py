@@ -162,6 +162,7 @@ async def get_refresh_token(refresh_token, session):
     Returns:
         dict: A dictionary containing the new access token, refresh token, and their expiration times.
     """
+
     # Extract payload from the refresh token
     token_payload = get_token_payload(refresh_token, settings.SECRET_KEY, settings.JWT_ALGORITHM)
     if not token_payload:

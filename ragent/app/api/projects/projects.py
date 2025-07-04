@@ -4,9 +4,10 @@ from sqlalchemy import select, delete, or_, cast, Integer, String
 from typing import List, Dict, Optional
 import uuid
 
-from ..database import get_db
-from .. import models, schemas
-from ..auth3 import get_current_active_user
+from ...database import get_db
+from ... import models, schemas
+from ...auth3 import get_current_active_user
+from app.auth.security import get_current_user, get_jwt_identity
 
 router = APIRouter(
     prefix="/projects",
@@ -17,7 +18,7 @@ router = APIRouter(
 async def create_project(
     project: schemas.ProjectCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: models.UserModel = Depends(get_current_active_user)
+    current_user: models.UserModel = Depends(get_current_user)
 ):
     # Create the new project in the database with explicit UUID generation
     project_data = project.dict()
@@ -33,7 +34,7 @@ async def create_project(
 @router.get("/", response_model=List[schemas.Project])
 async def read_projects(
     db: AsyncSession = Depends(get_db),
-    current_user: models.UserModel = Depends(get_current_active_user)
+    current_user: models.UserModel = Depends(get_current_user)
 ):
     # Retrieve projects for the current user
     result = await db.execute(
@@ -46,7 +47,7 @@ async def read_projects(
 async def read_project(
     project_identifier: str,
     db: AsyncSession = Depends(get_db),
-    current_user: models.UserModel = Depends(get_current_active_user)
+    current_user: models.UserModel = Depends(get_current_user)
 ):
     # Try to convert project_identifier to integer for ID comparison
     try:

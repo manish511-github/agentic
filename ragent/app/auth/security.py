@@ -113,3 +113,15 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     if user:
         return user
     raise HTTPException(status_code=401, detail="Not authorised.")
+
+def get_jwt_identity(token: str = Depends(oauth2_scheme)):
+    payload = get_token_payload(token, settings.JWT_SECRET, settings.JWT_ALGORITHM)
+    
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    try:
+        user_id = str_decode(payload.get('sub'))
+        username = payload.get('n')
+    except Exception:
+        raise HTTPException(status_code=401, detail="Malformed token payload")
+    return {"user_id": user_id, "username": username}

@@ -9,8 +9,8 @@ from app.agent import router as agent_router
 from app.core.agents_tasks.rdagent.rd_agent_v1.router import router as rdagent_router
 from app.core.agents_tasks.xagent.api_routes import router as xdagent_router
 # from app.auth3 import router as auth_router
-from app.api.projects import router as projects_router
-from app.api.agents import router as agents_router  # Import the agents router
+from app.api.projects.projects import router as projects_router
+from app.api.agents.agents import router as agents_router  # Import the agents router
 from app.sse import router as sse_router  # Add this import
 # Import the agent generator router
 from app.api.generate_profile import router as agent_generator_router
@@ -53,8 +53,7 @@ app = FastAPI(title="Advanced Website Scraper and Reddit Marketing Agent API")
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000",
-                   "https://rdagent-frontend.vercel.app"],  # Your frontend URL
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers

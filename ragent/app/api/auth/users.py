@@ -53,6 +53,13 @@ async def reset_password(data: ResetRequest,background_tasks: BackgroundTasks, d
     await user.reset_user_password(data,background_tasks, db)
     return JSONResponse({"message": "Your password has been updated."})
 
+@guest_router.post("/logout", status_code=status.HTTP_200_OK)
+async def logout():
+    response = JSONResponse({"message": "Logged out successfully."})
+    response.delete_cookie("access_token")
+    response.delete_cookie("refresh_token")
+    return response
+
 @auth_router.get("/me", status_code=status.HTTP_200_OK, response_model=UserResponse)
 async def fetch_user(user = Depends(get_current_user)):
     return user

@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, Depends, HTTPException, Body
 from fastapi.responses import RedirectResponse
 from app.auth.services.reddit_auth import oauth, get_reddit_user_tokens, refresh_reddit_token
 from app.models import OAuthAccount, UserModel, OAuthState
 from app.database import get_sync_db
-from app.auth.security import get_current_user
+from app.auth.security import get_current_user, get_jwt_identity
 from sqlalchemy import select
 from datetime import datetime
 from app.settings import get_settings
@@ -17,13 +17,14 @@ reddit_auth_router = APIRouter(prefix="/auth", tags=["auth"])
 
 logger = logging.getLogger(__name__)
 
-@reddit_auth_router.get("/reddit")
-async def reddit_login(request: Request, current_user: UserModel = Depends(get_current_user), db=Depends(get_sync_db)):
-    state = str(uuid.uuid4())
-    oauth_state = OAuthState(state=state, user_id=current_user.id)
-    db.add(oauth_state)
-    db.commit()
-    return await oauth.reddit.authorize_redirect(request, settings.REDDIT_REDIRECT_URI, state=state)
+# @reddit_auth_router.get("/reddit")
+# async def reddit_login(request: Request, current_user: UserModel = Depends(get_current_user), db=Depends(get_sync_db)):
+#     state = str(uuid.uuid4())
+#     oauth_state = OAuthState(state=state, user_id=current_user.id)
+#     db.add(oauth_state)
+#     db.commit()
+#     url = await oauth.reddit.authorize_redirect(request, settings.REDDIT_REDIRECT_URI, state=state)
+#     return {"url": url}
 
 @reddit_auth_router.get("/callback/reddit")
 async def reddit_callback(
@@ -80,4 +81,27 @@ async def reddit_callback(
    
     logger.info(f"Reddit account connected for user {current_user.id}")
     # Redirect to frontend (e.g., profile/settings page)
-    return RedirectResponse(url=f"{FRONTEND_URL}/profile?reddit_connected=1")
+    return RedirectResponse(url=f"{FRONTEND_URL}/reddit/callback?success=1&oauth_account_id={oauth_account.id}")
+
+@reddit_auth_router.post("/reddit/state")
+async def create_reddit_state(current_user: UserModel = Depends(get_current_user), db=Depends(get_sync_db)):
+    state = str(uuid.uuid4())
+    oauth_state = OAuthState(state=state, user_id=current_user.id)
+    db.add(oauth_state)
+    db.commit()
+    return {"state": state}
+
+@reddit_auth_router.get("/reddit/login")
+async def reddit_login_with_state(
+    request: Request,
+    db=Depends(get_sync_db)
+):
+    state = request.query_params.get("state")
+    if not state:
+        raise HTTPException(status_code=400, detail="Missing state")
+    oauth_state = db.query(OAuthState).filter_by(state=state).first()
+    if not oauth_state:
+        raise HTTPException(status_code=401, detail="Invalid or expired state")
+    return await oauth.reddit.authorize_redirect(
+        request, settings.REDDIT_REDIRECT_URI, state=state
+    )

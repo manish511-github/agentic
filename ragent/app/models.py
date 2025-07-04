@@ -179,6 +179,7 @@ class AgentModel(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_run = Column(DateTime(timezone=True),
                       nullable=True)  # Track last run time
+    oauth_account_id = Column(Integer, ForeignKey("oauth_accounts.id"), nullable=True)
 
     # Relationships
     project = relationship("ProjectModel", back_populates="agents")
@@ -186,6 +187,7 @@ class AgentModel(Base):
     schedule = relationship(
         "ScheduleModel", back_populates="agent", uselist=False)
     executions = relationship("ExecutionModel", back_populates="agent")
+    oauth_account = relationship("OAuthAccount")
 
 # ------------------------------------------------------------
 # Schedule and Execution Models

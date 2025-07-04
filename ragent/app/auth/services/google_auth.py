@@ -11,6 +11,7 @@ import os
 import structlog
 from app.settings import get_settings
 from app.auth.services.user import _generate_tokens
+from fastapi.responses import RedirectResponse
 settings= get_settings()
 logger = structlog.get_logger()
 
@@ -104,9 +105,6 @@ async def handle_google_oauth_callback(user_info, db):
 
     # Generate tokens using the same flow as user login
     tokens = _generate_tokens(user, db)
-    return {
-        "message": "Google login successful",
-        "user_id": user.id,
-        "email": user.email,
-        **tokens
-    }
+    # Build redirect URL with tokens as query parameters
+    redirect_url = f"{settings.FRONTEND_HOST}/auth/callback?access_token={tokens['access_token']}&refresh_token={tokens['refresh_token']}&expires_in={tokens['expires_in']}"
+    return RedirectResponse(url=redirect_url)
