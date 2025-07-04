@@ -1,4 +1,4 @@
-from ..state import AgentState
+from ..state import RedditAgentState
 from ..reddit_client import get_reddit_client
 from app.core.llm_client import get_embedding_model, get_llm
 from app.core.vector_db import get_collection_name, get_qdrant_client
@@ -21,7 +21,7 @@ logger = structlog.get_logger()
 semaphore = asyncio.Semaphore(settings.max_concurrency)
 
 
-async def fetch_basic_post_nodes(state: AgentState) -> AgentState:
+async def fetch_basic_post_nodes(state: RedditAgentState) -> RedditAgentState:
     if state.get("error"):
         return state
     state["posts"] = []
@@ -184,7 +184,7 @@ async def fetch_basic_post_nodes(state: AgentState) -> AgentState:
 
 
 
-async def process_subreddit(subreddit_name: str, state: AgentState):
+async def process_subreddit(subreddit_name: str, state: RedditAgentState):
     async with await get_reddit_client() as reddit:
         async with semaphore:
             subreddit_posts = []
@@ -272,7 +272,7 @@ async def process_subreddit(subreddit_name: str, state: AgentState):
                                 error=str(e))
             return subreddit_posts
         
-async def process_subreddit_posts(subreddit_posts: List[RedditPost], state: AgentState):
+async def process_subreddit_posts(subreddit_posts: List[RedditPost], state: RedditAgentState):
     embedding_model = get_embedding_model()
     qdrant_client = get_qdrant_client()
     collection_name = get_collection_name(state["agent_name"],"rdagent_v1")
@@ -303,7 +303,7 @@ async def process_subreddit_posts(subreddit_posts: List[RedditPost], state: Agen
                 error=str(err),
             )
 
-async def fetch_posts_node(state: AgentState) -> AgentState:
+async def fetch_posts_node(state: RedditAgentState) -> RedditAgentState:
     if state.get("error"):
         logger.warning("Skipping fetch_posts_node due to existing error",
                        agent_name=state.get("agent_name", "unknown"),

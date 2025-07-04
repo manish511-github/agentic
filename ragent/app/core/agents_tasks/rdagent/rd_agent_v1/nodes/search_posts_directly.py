@@ -1,4 +1,4 @@
-from ..state import AgentState
+from ..state import RedditAgentState
 from ..reddit_client import get_reddit_client
 from app.core.llm_client import get_llm, get_embedding_model
 from app.core.vector_db import get_qdrant_client
@@ -94,7 +94,7 @@ async def test_qdrant_connection(max_retries=3):
                 raise
 
 
-async def process_submission_batch(submissions: list[Submission], current_query: str, seen_post_ids: set[str], search_queries: list[str], state: AgentState):
+async def process_submission_batch(submissions: list[Submission], current_query: str, seen_post_ids: set[str], search_queries: list[str], state: RedditAgentState):
     """
     Process a batch of submissions and return a list of posts
     """
@@ -145,7 +145,7 @@ async def process_query(query: str, all_subreddit: SubredditHelper):
     return submissions, query
 
 
-async def search_posts_directly_node(state: AgentState) -> AgentState:
+async def search_posts_directly_node(state: RedditAgentState) -> RedditAgentState:
     if state.get("error"):
         return state
 

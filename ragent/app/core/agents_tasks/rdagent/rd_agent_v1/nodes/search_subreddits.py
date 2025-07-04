@@ -1,4 +1,4 @@
-from ..state import AgentState
+from ..state import RedditAgentState
 from ..reddit_client import get_reddit_client
 from app.core.llm_client import get_llm
 import structlog
@@ -12,7 +12,7 @@ from ...utils.rate_limiter import reddit_limiter
 logger = structlog.get_logger()
 
 
-async def search_subreddits_node(state: AgentState) -> AgentState:
+async def search_subreddits_node(state: RedditAgentState) -> RedditAgentState:
     try:
         target_subreddits = {}
         reddit = await get_reddit_client()

@@ -89,16 +89,8 @@ class DaysOfWeekEnum(str, enum.Enum):
 class ScheduleBase(BaseModel):
     schedule_type: ScheduleTypeEnum
     schedule_time: Optional[datetime] = None
-    days_of_week: Optional[List[DaysOfWeekEnum]] = None
+    days_of_week: Optional[List[DaysOfWeekEnum]] = []
     day_of_month: Optional[int] = None
-
-    @model_validator(mode="after")
-    def validate_schedule(self):
-        if self.schedule_type == "weekly" and not self.days_of_week:
-            raise ValueError("days_of_week is required for weekly schedule")
-        if self.schedule_type == "monthly" and self.day_of_month is None:
-            raise ValueError("day_of_month is required for monthly schedule")
-        return self
 
 
 class RedditSettings(BaseModel):
@@ -153,16 +145,17 @@ class AgentBase(BaseModel):
     goals: str
     instructions: str
     expectations: str
-    keywords: List[str]
+    agent_keywords: List[str]
     project_id: str
     mode: AgentModeEnum
-    review_minutes: int
-    advanced_settings: Dict = {}
-    platform_settings: Dict = {}
+    review_minutes: Optional[int] = None
+    oauth_account_id: Optional[int] = None
+    advanced_settings: Optional[Dict] = None
+    platform_settings: Optional[Dict] = None
 
 
 class AgentCreate(AgentBase):
-    schedule: ScheduleBase
+    schedule: Optional[ScheduleBase] = None
 
 
 class Agent(AgentBase):

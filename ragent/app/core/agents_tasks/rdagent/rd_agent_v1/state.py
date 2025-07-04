@@ -5,7 +5,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from app.schemas import AgentPlatformEnum
 from ..schemas import RedditPost
 
-class AgentState(TypedDict):
+class RedditAgentState(TypedDict):
     agent_name: str
     agent_id: int               # agent id from agents table
     agent_platform: AgentPlatformEnum         # reddit, twitter, linkedin
@@ -16,8 +16,8 @@ class AgentState(TypedDict):
     expectation: str
     target_audience: str
     instructions: str
-    company_keywords: List[str]
-    keywords: Optional[List[str]]
+    company_keywords: Optional[List[str]]
+    keywords: List[str]
     generated_queries: Optional[List[str]]
     min_upvotes: int
     max_age_days: int
