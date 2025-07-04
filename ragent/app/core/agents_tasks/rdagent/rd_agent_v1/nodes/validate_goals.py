@@ -1,4 +1,4 @@
-from ..state import AgentState
+from ..state import RedditAgentState
 import structlog
 
 logger = structlog.get_logger()
@@ -17,7 +17,7 @@ def map_agent_goals(agent_goals):
             mapped_goals.append(mapped_goal)
     return mapped_goals if mapped_goals else ["increase brand awareness"]
 
-async def validate_input_node(state: AgentState) -> AgentState:
+async def validate_input_node(state: RedditAgentState) -> RedditAgentState:
     valid_goals = ["increase brand awareness", "engage potential customers", "grow web traffic"]
     if state["goals"]:
         mapped_goals = map_agent_goals(state["goals"])

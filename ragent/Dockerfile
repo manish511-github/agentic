@@ -22,7 +22,7 @@ ENV PYTHONPATH=/app
 
 # Copy requirements and install dependencies
 COPY requirements.txt .
-RUN uv pip install --system --no-cache -r requirements.txt \
+RUN uv pip install --system -r requirements.txt \
    && uv pip install --system --no-cache watchgod
 
 # Commented out SentenceTransformer model pre-download

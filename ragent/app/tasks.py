@@ -23,7 +23,7 @@ logger = structlog.get_logger()
 nest_asyncio.apply()
 
 # Create async engine and session factory for the workflow
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/ragent")
+DATABASE_URL = os.getenv("POSTGRES_DSN", "postgresql+asyncpg://postgres:postgres@localhost:5432/ragent")
 engine = create_async_engine(DATABASE_URL)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 

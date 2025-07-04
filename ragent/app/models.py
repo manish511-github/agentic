@@ -169,7 +169,7 @@ class AgentModel(Base):
     goals = Column(String)
     instructions = Column(String)
     expectations = Column(String)
-    keywords = Column(ARRAY(String))
+    agent_keywords = Column(ARRAY(String))
     project_id = Column(String, ForeignKey("projects.uuid"))
     mode = Column(String, default="copilot")  # copilot, autonomous
     review_minutes = Column(Integer, nullable=True)

@@ -1,4 +1,4 @@
-from ..state import AgentState
+from ..state import RedditAgentState
 from ..reddit_client import get_reddit_client
 from app.core.llm_client import get_llm
 import structlog
@@ -12,7 +12,7 @@ from ...utils.rate_limiter import reddit_limiter
 logger = structlog.get_logger()
 
 
-async def search_subreddits_node(state: AgentState) -> AgentState:
+async def search_subreddits_node(state: RedditAgentState) -> RedditAgentState:
     try:
         target_subreddits = {}
         reddit = await get_reddit_client()
@@ -37,7 +37,7 @@ async def search_subreddits_node(state: AgentState) -> AgentState:
         for i in range(0, len(keywords), settings.embedding_batch_size):
             batch = keywords[i:i+settings.embedding_batch_size]
             results = await asyncio.gather(*(search_query_in_subreddit(query) for query in batch))
-            logger.info("Results for searching subreddits for keywords: {batch}", batch=batch, results=results)
+            logger.info("Results for searching subreddits for keywords: {batch}", batch=batch, results=len(results))
             for res in results:
                 target_subreddits.update(res)
             logger.info("Batch processed", batch=batch)

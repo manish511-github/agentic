@@ -1,5 +1,5 @@
 from langgraph.graph import StateGraph, END
-from .state import AgentState
+from .state import RedditAgentState
 from .nodes.validate_goals import validate_input_node
 from .nodes.search_posts_directly import search_posts_directly_node
 from .nodes.search_subreddits import search_subreddits_node
@@ -11,7 +11,7 @@ import asyncio
 
 
 def create_reddit_graph() -> StateGraph:
-    graph = StateGraph(AgentState)
+    graph = StateGraph(RedditAgentState)
     graph.add_node("validate_input", validate_input_node)
     graph.add_node("generate_queries_node", generate_queries_node)
     graph.add_node("search_posts_directly_node", search_posts_directly_node)
@@ -28,7 +28,7 @@ def create_reddit_graph() -> StateGraph:
 # Basic Reddit Agent Call -
 
 def create_basic_reddit_graph() -> StateGraph:
-    graph = StateGraph(AgentState)
+    graph = StateGraph(RedditAgentState)
     graph.add_node("validate_input", validate_input_node)
     graph.add_node("generate_queries_node", generate_queries_node)
     graph.add_node("search_posts_directly_node", search_posts_directly_node)
@@ -71,7 +71,7 @@ async def parallel_advanced_reddit_node(state):
     return state
 
 def create_parallel_advanced_reddit_graph() -> StateGraph:
-    graph = StateGraph(AgentState)
+    graph = StateGraph(RedditAgentState)
     graph.add_node("validate_input", validate_input_node)
     graph.add_node("generate_queries_node", generate_queries_node)
     graph.add_node("parallel_advanced_reddit_node", parallel_advanced_reddit_node)
@@ -82,7 +82,7 @@ def create_parallel_advanced_reddit_graph() -> StateGraph:
     return graph.compile()
 
 def create_parallel_reddit_graph() -> StateGraph:
-    graph = StateGraph(AgentState)
+    graph = StateGraph(RedditAgentState)
     graph.add_node("validate_input", validate_input_node)
     graph.add_node("generate_queries_node", generate_queries_node)
     graph.add_node("parallel_reddit_node", parallel_reddit_node)

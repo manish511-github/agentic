@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 import structlog
 from datetime import datetime
 
-from app.models import AgentModel, ExecutionModel, ExecutionStatusEnum
+from app.models import AgentModel, ExecutionModel, ExecutionStatusEnum, OAuthAccount, ProjectModel
 from app.database import SessionLocal
 
 logger = structlog.get_logger()
@@ -34,7 +34,9 @@ class BaseAgentExecutor(ABC):
         self.db_session: Optional[Session] = None
         self.execution: Optional[ExecutionModel] = None
         self.agent: Optional[AgentModel] = None
-
+        self.project: Optional[ProjectModel] = None
+        self.oauth_account: Optional[OAuthAccount] = None
+        
     def __enter__(self):
         """Context manager entry - initialize database session."""
         self.db_session = SessionLocal()
@@ -89,6 +91,31 @@ class BaseAgentExecutor(ABC):
                     agent_id=self.agent_id
                 )
                 return False
+            
+            # Load project details for the agent
+            self.project = self.db_session.query(ProjectModel).filter(
+                ProjectModel.uuid == self.agent.project_id
+            ).first()
+
+            if not self.project:
+                logger.error(
+                    "Project not found",
+                    project_id=self.agent.project_id
+                )
+                return False
+            
+            # Load oauth account details for the agent if present
+            if self.agent.oauth_account_id:
+                self.oauth_account = self.db_session.query(OAuthAccount).filter(
+                    OAuthAccount.id == self.agent.oauth_account_id
+                ).first()
+            
+                if not self.oauth_account:
+                    logger.error(
+                        "OAuth account not found",
+                        oauth_account_id=self.agent.oauth_account_id
+                    )
+                    return False
 
             # Mark execution as running
             self.execution.status = ExecutionStatusEnum.running
@@ -151,7 +178,7 @@ class BaseAgentExecutor(ABC):
             )
 
     @abstractmethod
-    def create_initial_state(self) -> Dict[str, Any]:
+    def create_initial_state(self) -> Dict[str, Any]:   
         """
         Create the initial state for the agent workflow.
 
@@ -217,13 +244,15 @@ class BaseAgentExecutor(ABC):
                 return results
 
             # Save results
-            if self.save_results(results):
-                self.mark_execution_completed(results)
-                return results
-            else:
-                error_msg = "Failed to save execution results"
-                self.mark_execution_failed(error_msg)
-                return {"error": error_msg}
+            # if self.save_results(results):
+            #     self.mark_execution_completed(results)
+            #     return results
+            # else:
+            #     error_msg = "Failed to save execution results"
+            #     self.mark_execution_failed(error_msg)
+            #     return {"error": error_msg}
+            print(results)
+            return results
 
         except Exception as e:
             error_msg = f"Agent execution failed: {str(e)}"

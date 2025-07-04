@@ -107,27 +107,44 @@ async def create_agent(
         goals=agent_payload["goals"],
         instructions=agent_payload["instructions"],
         expectations=agent_payload.get("expectations", ""),
-        keywords=agent_payload.get("keywords", []),
+        agent_keywords=agent_payload.get("agent_keywords", []),
         project_id=project.uuid,
         mode=agent_payload["mode"],
-        review_minutes=agent_payload["review_minutes"],
-        advanced_settings=agent_payload.get("advanced_settings", {}),
-        platform_settings=agent_payload.get("platform_settings", {})
+        review_minutes=agent_payload.get("review_minutes"),
+        oauth_account_id=agent_payload.get("oauth_account_id"),
+        advanced_settings=agent_payload.get("advanced_settings"),
+        platform_settings=agent_payload.get("platform_settings")
     )
+    
     if agent_payload.get("schedule"):
-        schedule_time = agent_payload["schedule"]["schedule_time"]
+        schedule_data = agent_payload["schedule"]
+        schedule_type = schedule_data["schedule_type"]
+        schedule_time = schedule_data.get("schedule_time")
+        
         if schedule_time is not None:
             # convert schedule time string to datetime object
             schedule_time = datetime.strptime(
                 schedule_time, "%Y-%m-%d %H:%M:%S")
+        
+        # Set default values based on schedule type if not provided
+        days_of_week = None
+        day_of_month = None
+        
+        if schedule_type == "weekly":
+            # If weekly, set today's weekday name as default
+            today_weekday = datetime.now(timezone.utc).weekday()
+            weekday_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+            days_of_week = schedule_data.get("days_of_week", [weekday_names[today_weekday]])
+        elif schedule_type == "monthly":
+            # If monthly, set today's day of month as default
+            today_day = datetime.now(timezone.utc).day
+            day_of_month = schedule_data.get("day_of_month", today_day)
+        
         db_agent.schedule = models.ScheduleModel(
-            schedule_type=agent_payload["schedule"]["schedule_type"],
-            schedule_time=schedule_time if agent_payload[
-                "schedule"]["schedule_type"] != "daily" else datetime.now(timezone.utc).replace(tzinfo=None),
-            days_of_week=agent_payload["schedule"]["days_of_week"] if agent_payload[
-                "schedule"]["schedule_type"] == "weekly" else None,
-            day_of_month=agent_payload["schedule"]["day_of_month"] if agent_payload[
-                "schedule"]["schedule_type"] == "monthly" else None
+            schedule_type=schedule_type,
+            schedule_time=schedule_time if schedule_time is not None else datetime.now(timezone.utc).replace(tzinfo=None),
+            days_of_week=days_of_week,
+            day_of_month=day_of_month
         )
 
     db.add(db_agent)
@@ -137,13 +154,15 @@ async def create_agent(
 
     if agent_payload.get("schedule"):
         # Create an execution entry now that schedule and agent have IDs
+        # Ensure schedule_time is never null - use current time as default if not provided
+        execution_schedule_time = schedule_time if schedule_time is not None else datetime.now(timezone.utc).replace(tzinfo=None)
+        
         execution = models.ExecutionModel(
             schedule_id=db_agent.schedule.id,
             agent_id=db_agent.id,
             status=models.ExecutionStatusEnum.scheduled,
             created_at=datetime.now(timezone.utc).replace(tzinfo=None),
-            schedule_time=schedule_time if agent_payload[
-                "schedule"]["schedule_type"] != "daily" else datetime.now(timezone.utc).replace(tzinfo=None)
+            schedule_time=execution_schedule_time
         )
         db.add(execution)
 

@@ -326,6 +326,7 @@ async def scrape_website_data(input : WebsiteInput, db: AsyncSession =Depends(ge
 
     try:
         scraped_data = await scrape_website(input.url)
+        logger.info("Scraped data", scraped_data=len(scraped_data))
         # Updated unpacking to include main_category
         description, target_audience, keywords, products_services, main_category = await analyze_content(scraped_data["content"],input.url, scraped_data["schema_products"])
         result = WebsiteData(
