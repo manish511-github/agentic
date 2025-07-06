@@ -13,6 +13,7 @@ from app.models import (
     ExecutionModel,
     ExecutionStatusEnum
 )
+from app.core.agents_tasks.rdagent.schemas import RedditPost
 
 logger = structlog.get_logger()
 
@@ -110,12 +111,54 @@ class ResultMapper(ABC):
         # Remove non-serializable keys like 'db', 'llm', etc.
         non_serializable_keys = {'db', 'llm', 'session'}
 
-        clean_data = {
-            k: v for k, v in results.items()
-            if k not in non_serializable_keys and v is not None
-        }
+        clean_data = {}
+        for k, v in results.items():
+            if k not in non_serializable_keys and v is not None:
+                # Convert non-serializable types to serializable ones
+                clean_data[k] = self._make_serializable(v)
 
         return clean_data
+
+    def _make_serializable(self, obj: Any) -> Any:
+        """
+        Convert non-serializable objects to serializable ones.
+
+        Args:
+            obj: Object to make serializable
+
+        Returns:
+            Serializable version of the object
+        """
+        if isinstance(obj, set):
+            # Convert sets to lists
+            return list(obj)
+        elif isinstance(obj, dict):
+            # Recursively handle dictionaries
+            return {k: self._make_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            # Recursively handle lists and tuples
+            return [self._make_serializable(item) for item in obj]
+        elif hasattr(obj, 'dict') and callable(obj.dict):
+            # Handle Pydantic models
+            return obj.dict()
+        elif hasattr(obj, '__dict__'):
+            # Handle other objects with __dict__
+            try:
+                return {k: self._make_serializable(v) for k, v in obj.__dict__.items() 
+                       if not k.startswith('_')}
+            except:
+                # If conversion fails, convert to string
+                return str(obj)
+        else:
+            # For basic types (str, int, float, bool, None) and unknown types
+            try:
+                # Test if it's JSON serializable
+                import json
+                json.dumps(obj)
+                return obj
+            except (TypeError, ValueError):
+                # If not serializable, convert to string
+                return str(obj)
 
 
 class RedditResultMapper(ResultMapper):
@@ -136,24 +179,46 @@ class RedditResultMapper(ResultMapper):
             bool: True if save successful, False otherwise
         """
         try:
-            # Save general agent results
+            # Save general agent results first
             if not self.save_agent_result(results):
                 return False
 
-            # Save Reddit-specific data
+            # Extract posts from results (could be in multiple locations)
             posts = results.get("posts", [])
+            if not posts:
+                # Try alternative locations in case of different agent versions
+                posts = results.get("subreddit_posts", []) + results.get("direct_posts", [])
+
+            # Save Reddit-specific data if we have posts
             if posts:
+                logger.info(f"Saving {len(posts)} Reddit posts and execution mappings")
+                
+                # Save posts first (they're referenced by execution mappings)
                 self._save_reddit_posts(posts)
+                
+                # Flush to ensure posts are saved before mappings reference them
+                self.db_session.flush()
+                
+                # Save execution mappings that reference the posts
                 self._save_reddit_execution_mappings(posts)
-
-            self.db_session.commit()
-
-            logger.info(
-                "Reddit results saved successfully",
-                execution_id=self.execution_id,
-                agent_id=self.agent.id,
-                posts_count=len(posts)
-            )
+                
+                # Commit all changes
+                self.db_session.commit()
+                
+                logger.info(
+                    "Reddit results saved successfully",
+                    execution_id=self.execution_id,
+                    agent_id=self.agent.id,
+                    posts_count=len(posts)
+                )
+            else:
+                # No posts found, but still commit the general results
+                self.db_session.commit()
+                logger.info(
+                    "Reddit agent completed with no posts found",
+                    execution_id=self.execution_id,
+                    agent_id=self.agent.id
+                )
 
             return True
 
@@ -162,103 +227,190 @@ class RedditResultMapper(ResultMapper):
                 "Failed to save Reddit results",
                 execution_id=self.execution_id,
                 agent_id=self.agent.id,
-                error=str(e)
+                error=str(e),
+                exc_info=True
             )
             self.db_session.rollback()
             return False
 
-    def _save_reddit_posts(self, posts: List[Dict[str, Any]]):
+    def _save_reddit_posts(self, posts: List[RedditPost]):
         """
         Save Reddit posts to the reddit_posts table.
 
         Args:
-            posts: List of post dictionaries
+            posts: List of RedditPost objects from Reddit agent
         """
-        for post in posts:
-            try:
-                # Check if post already exists
-                existing_post = self.db_session.query(RedditPostModel).filter(
-                    RedditPostModel.post_id == post["post_id"]
-                ).first()
+        if not posts:
+            return
 
-                if existing_post:
+        # Collect post IDs to check for existing posts in bulk
+        post_ids = [post.post_id for post in posts if post.post_id]
+        existing_posts = set()
+        
+        if post_ids:
+            existing_query = self.db_session.query(RedditPostModel.post_id).filter(
+                RedditPostModel.post_id.in_(post_ids)
+            )
+            existing_posts = {row[0] for row in existing_query.all()}
+
+        posts_to_add = []
+        for post in posts:
+            post_id = post.post_id
+            if not post_id or post_id in existing_posts:
+                if post_id in existing_posts:
                     logger.debug(
                         "Reddit post already exists, skipping",
-                        post_id=post["post_id"]
+                        post_id=post_id
                     )
-                    continue
+                continue
 
+            try:
+                # Parse created timestamp
+                created_utc = None
+                if post.created:
+                    try:
+                        created_utc = datetime.fromisoformat(post.created)
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Failed to parse created timestamp: {post.created}")
+
+                # Create RedditPostModel instance
                 reddit_post = RedditPostModel(
-                    agent_name=self.agent.agent_name,
-                    goals=self.agent.goals.split(
-                        ",") if self.agent.goals else [],
-                    instructions=self.agent.instructions,
-                    subreddit=post["subreddit"],
-                    post_id=post["post_id"],
-                    post_title=post["post_title"],
-                    post_body=post["post_body"],
-                    post_url=post["post_url"],
-                    upvotes=post.get("upvotes", 0),
-                    comment_count=post.get("comment_count", 0),
-                    created=datetime.fromisoformat(
-                        post["created"]) if post.get("created") else None,
-                    keyword_relevance=post.get("keyword_relevance"),
-                    matched_query=post.get("matched_query"),
-                    semantic_relevance=post.get("semantic_relevance"),
-                    combined_relevance=post.get("combined_relevance")
+                    subreddit=post.subreddit,
+                    post_id=post_id,
+                    post_title=post.post_title,
+                    post_body=post.post_body or "",
+                    post_url=post.post_url,
+                    created_utc=created_utc,
+                    upvotes=post.upvotes or 0,
+                    comment_count=post.comment_count or 0,
+                    
+                    # Combined text for embeddings/search (core post data)
+                    text=post.text
                 )
 
-                self.db_session.add(reddit_post)
+                posts_to_add.append(reddit_post)
 
             except Exception as e:
                 logger.warning(
-                    "Failed to save Reddit post",
-                    post_id=post.get("post_id", "unknown"),
+                    "Failed to prepare Reddit post for saving",
+                    post_id=post_id,
                     error=str(e)
                 )
 
-    def _save_reddit_execution_mappings(self, posts: List[Dict[str, Any]]):
+        # Bulk add all new posts
+        if posts_to_add:
+            try:
+                self.db_session.add_all(posts_to_add)
+                logger.info(f"Prepared {len(posts_to_add)} Reddit posts for bulk insert")
+            except Exception as e:
+                logger.error(f"Failed to bulk add Reddit posts: {str(e)}")
+                # Fallback to individual adds
+                for post in posts_to_add:
+                    try:
+                        self.db_session.add(post)
+                    except Exception as individual_error:
+                        logger.warning(
+                            "Failed to add individual Reddit post",
+                            post_id=getattr(post, 'post_id', 'unknown'),
+                            error=str(individual_error)
+                        )
+
+    def _save_reddit_execution_mappings(self, posts: List[RedditPost]):
         """
         Save Reddit execution mappings to track which posts were found in which execution.
 
         Args:
-            posts: List of post dictionaries
+            posts: List of RedditPost objects from Reddit agent
         """
-        for post in posts:
-            try:
-                # Check if mapping already exists
-                existing_mapping = self.db_session.query(RedditAgentExecutionMapperModel).filter(
-                    RedditAgentExecutionMapperModel.execution_id == self.execution_id,
-                    RedditAgentExecutionMapperModel.agent_id == self.agent.id,
-                    RedditAgentExecutionMapperModel.post_id == post["post_id"]
-                ).first()
+        if not posts:
+            return
 
-                if existing_mapping:
+        # Collect existing mappings to avoid duplicates
+        post_ids = [post.post_id for post in posts if post.post_id]
+        existing_mappings = set()
+        
+        if post_ids:
+            existing_query = self.db_session.query(
+                RedditAgentExecutionMapperModel.post_id
+            ).filter(
+                RedditAgentExecutionMapperModel.execution_id == self.execution_id,
+                RedditAgentExecutionMapperModel.agent_id == self.agent.id,
+                RedditAgentExecutionMapperModel.post_id.in_(post_ids)
+            )
+            existing_mappings = {row[0] for row in existing_query.all()}
+
+        mappings_to_add = []
+        for post in posts:
+            post_id = post.post_id
+            if not post_id or post_id in existing_mappings:
+                if post_id in existing_mappings:
                     logger.debug(
                         "Reddit execution mapping already exists, skipping",
                         execution_id=self.execution_id,
-                        post_id=post["post_id"]
+                        post_id=post_id
                     )
-                    continue
+                continue
+
+            try:
+                # Determine primary relevance score (prefer combined, fallback to others)
+                primary_relevance = (
+                    getattr(post, 'combined_relevance', None) or 
+                    getattr(post, 'semantic_relevance', None) or 
+                    getattr(post, 'llm_relevance', None) or 
+                    getattr(post, 'keyword_relevance', None) or 
+                    getattr(post, 'relevance_score', None) or 
+                    0.0
+                )
 
                 mapping = RedditAgentExecutionMapperModel(
                     execution_id=self.execution_id,
                     agent_id=self.agent.id,
-                    post_id=post["post_id"],
-                    relevance_score=post.get("combined_relevance", 0.0),
-                    comment_draft=post.get("comment_draft"),
+                    post_id=post_id,
+                    
+                    # Relevance scores from agent analysis
+                    relevance_score=primary_relevance,
+                    keyword_relevance=getattr(post, 'keyword_relevance', None),
+                    semantic_relevance=getattr(post, 'semantic_relevance', None),
+                    combined_relevance=getattr(post, 'combined_relevance', None),
+                    llm_relevance=getattr(post, 'llm_relevance', None),
+                    
+                    # Processing metadata
+                    matched_query=getattr(post, 'matched_query', None),
+                    sort_method=getattr(post, 'sort_method', None),
+                    
+                    # Agent output and processing
+                    comment_draft=getattr(post, 'comment_draft', None),
                     status="processed"
                 )
 
-                self.db_session.add(mapping)
+                mappings_to_add.append(mapping)
 
             except Exception as e:
                 logger.warning(
-                    "Failed to save Reddit execution mapping",
+                    "Failed to prepare Reddit execution mapping for saving",
                     execution_id=self.execution_id,
-                    post_id=post.get("post_id", "unknown"),
+                    post_id=post_id,
                     error=str(e)
                 )
+
+        # Bulk add all new mappings
+        if mappings_to_add:
+            try:
+                self.db_session.add_all(mappings_to_add)
+                logger.info(f"Prepared {len(mappings_to_add)} Reddit execution mappings for bulk insert")
+            except Exception as e:
+                logger.error(f"Failed to bulk add Reddit execution mappings: {str(e)}")
+                # Fallback to individual adds
+                for mapping in mappings_to_add:
+                    try:
+                        self.db_session.add(mapping)
+                    except Exception as individual_error:
+                        logger.warning(
+                            "Failed to add individual Reddit execution mapping",
+                            execution_id=self.execution_id,
+                            post_id=getattr(mapping, 'post_id', 'unknown'),
+                            error=str(individual_error)
+                        )
 
 
 class HackerNewsResultMapper(ResultMapper):

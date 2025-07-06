@@ -45,12 +45,13 @@ def create_basic_reddit_graph() -> StateGraph:
 # Parallel Reddit Agent Call (true parallel using asyncio.gather in a node)
 async def parallel_reddit_node(state):
     async def direct_search_branch():
-        return {"direct_posts": await search_posts_directly_node(state.copy())}
+        result_state = await search_posts_directly_node(state.copy())
+        return {"direct_posts": result_state.get("direct_posts", [])}
         
     async def subreddit_branch():
         sub_state = await search_subreddits_node(state.copy())
         fetch_state = await fetch_basic_post_nodes(sub_state)
-        return {"subreddit_posts": fetch_state}
+        return {"subreddit_posts": fetch_state.get("subreddit_posts", [])}
     result1, result2 = await asyncio.gather(direct_search_branch(), subreddit_branch())
     state.update(result1)
     state.update(result2)
@@ -59,12 +60,13 @@ async def parallel_reddit_node(state):
 # Parallel Reddit Agent Call (true parallel using asyncio.gather in a node)
 async def parallel_advanced_reddit_node(state):
     async def direct_search_branch():
-        return {"direct_posts": await search_posts_directly_node(state.copy())}
+        result_state = await search_posts_directly_node(state.copy())
+        return {"direct_posts": result_state.get("direct_posts", [])}
         
     async def subreddit_branch():
         sub_state = await search_subreddits_node(state.copy())
         fetch_state = await fetch_posts_node(sub_state)
-        return {"subreddit_posts": fetch_state}
+        return {"subreddit_posts": fetch_state.get("posts", [])}
     result1, result2 = await asyncio.gather(direct_search_branch(), subreddit_branch())
     state.update(result1)
     state.update(result2)

@@ -37,15 +37,18 @@ async def delete_collection_with_retry(collection_name, max_retries=3):
             return
         except Exception as e:
             if "not found" in str(e).lower():
-                logger.info(f"Collection {collection_name} not found, skipping deletion")
+                logger.info(
+                    f"Collection {collection_name} not found, skipping deletion")
                 return
-            
+
             if attempt < max_retries - 1:
                 wait_time = 2 ** attempt  # Exponential backoff
-                logger.warning(f"Failed to delete collection (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {wait_time}s...")
+                logger.warning(
+                    f"Failed to delete collection (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {wait_time}s...")
                 await asyncio.sleep(wait_time)
             else:
-                logger.error(f"Error deleting collection after {max_retries} attempts: {str(e)}")
+                logger.error(
+                    f"Error deleting collection after {max_retries} attempts: {str(e)}")
                 raise
 
 
@@ -60,17 +63,20 @@ async def create_collection_with_retry(collection_name, max_retries=3):
             VECTOR_SIZE = 768
             qdrant_client.create_collection(
                 collection_name=collection_name,
-                vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE)
+                vectors_config=VectorParams(
+                    size=VECTOR_SIZE, distance=Distance.COSINE)
             )
             logger.info(f"Created new collection {collection_name}")
             return
         except Exception as e:
             if attempt < max_retries - 1:
                 wait_time = 2 ** attempt  # Exponential backoff
-                logger.warning(f"Failed to create collection (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {wait_time}s...")
+                logger.warning(
+                    f"Failed to create collection (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {wait_time}s...")
                 await asyncio.sleep(wait_time)
             else:
-                logger.error(f"Error creating collection after {max_retries} attempts: {str(e)}")
+                logger.error(
+                    f"Error creating collection after {max_retries} attempts: {str(e)}")
                 raise
 
 
@@ -87,10 +93,12 @@ async def test_qdrant_connection(max_retries=3):
         except Exception as e:
             if attempt < max_retries - 1:
                 wait_time = 2 ** attempt  # Exponential backoff
-                logger.warning(f"Qdrant connection test failed (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {wait_time}s...")
+                logger.warning(
+                    f"Qdrant connection test failed (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {wait_time}s...")
                 await asyncio.sleep(wait_time)
             else:
-                logger.error(f"Qdrant connection failed after {max_retries} attempts: {str(e)}")
+                logger.error(
+                    f"Qdrant connection failed after {max_retries} attempts: {str(e)}")
                 raise
 
 
@@ -109,7 +117,7 @@ async def process_submission_batch(submissions: list[Submission], current_query:
             1 for kw in search_queries if kw.lower() in content)
         keyword_relevance = min(
             1.0, keyword_matches / max(1, len(state["keywords"])))
-        
+
         post = RedditPost.from_reddit_submission(
             submission=submission,
             subreddit_name=submission.subreddit.display_name,
@@ -152,7 +160,7 @@ async def search_posts_directly_node(state: RedditAgentState) -> RedditAgentStat
     try:
         # Test Qdrant connection first
         await test_qdrant_connection()
-        
+
         reddit = await get_reddit_client()
         llm = get_llm()
         qdrant_client = get_qdrant_client()
@@ -178,7 +186,7 @@ async def search_posts_directly_node(state: RedditAgentState) -> RedditAgentStat
             "keywords": state.get("keywords", "")
         }
 
-        # Get search queries    
+        # Get search queries
         search_queries = state.get("generated_queries", [])
 
         # Set up batching
@@ -216,7 +224,7 @@ async def search_posts_directly_node(state: RedditAgentState) -> RedditAgentStat
 
                 # Embed the submissions in the Vector DB in batches
                 semaphore = asyncio.Semaphore(EMBEDDING_BATCH_SIZE)
-                
+
                 async def embed_and_upsert(embedding_batch):
                     texts = [post.text for post in embedding_batch]
                     async with semaphore:
@@ -239,7 +247,8 @@ async def search_posts_directly_node(state: RedditAgentState) -> RedditAgentStat
                                     points=batch_points
                                 )
                             except Exception as e:
-                                logger.error(f"Error upserting batch: {str(e)}")
+                                logger.error(
+                                    f"Error upserting batch: {str(e)}")
                         return batch_posts
 
                 embed_tasks = []

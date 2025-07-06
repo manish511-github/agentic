@@ -33,12 +33,10 @@ from app.models import (
     ScheduleModel,
     ScheduleTypeEnum,
 )
-from app.tasks import run_agent  # Existing task that processes an agent
 import structlog
 
 __all__: List[str] = [
     "process_scheduled_executions",
-    "execute_agent_run",
 ]
 
 logger = structlog.get_logger()
@@ -122,27 +120,6 @@ def _compute_next_execution_time(
 # Celery tasks
 # ---------------------------------------------------------------------------
 
-@celery_app.task(name="app.schedular.schedular.execute_agent_run")
-def execute_agent_run(execution_id: int, agent_id: int) -> None:  # pragma: no cover
-    """Worker task that triggers processing of *execution_id* via ``run_agent``.
-
-    The heavy-lifting is delegated to the already existing ``run_agent`` task
-    which operates on *agent_id*.
-    """
-    try:
-        with SessionLocal() as session:
-            execution: ExecutionModel | None = session.get(
-                ExecutionModel, execution_id)
-            if not execution:
-                return  # Nothing to process
-
-            # Delegate to existing agent task
-            run_agent.delay(agent_id)
-    except Exception as exc:  # pragma: no cover
-        # Celery will log the exception, re-raise for visibility
-        raise exc
-
-
 @celery_app.task(name="app.schedular.schedular.process_scheduled_executions")
 def process_scheduled_executions(lookahead_minutes: int | None = None) -> None:  # pragma: no cover
     """Main scheduler task executed every minute by Celery Beat.
@@ -160,46 +137,91 @@ def process_scheduled_executions(lookahead_minutes: int | None = None) -> None: 
         window_end=window_end
     )
 
+    processed_count = 0
+    
     with SessionLocal() as session:
-        # 1. Fetch pending executions within the window
-        pending_executions: List[ExecutionModel] = (
-            session.query(ExecutionModel)
-            .filter(
-                ExecutionModel.status == ExecutionStatusEnum.scheduled,
-                ExecutionModel.schedule_time <= window_end,
-            )
-            .all()
-        )
-
-        for execution in pending_executions:
-            if execution.schedule is None:
-                logger.warning(
-                    "Orphan execution %s - no schedule, skipping", execution.id)
-                continue
-            # 2.a Compute and persist the *next* execution for this schedule
-            next_time = _compute_next_execution_time(
-                execution.schedule, execution.schedule_time)
-            new_execution = ExecutionModel(
-                schedule_id=execution.schedule_id,
-                agent_id=execution.agent_id,
-                schedule_time=next_time,
-                status=ExecutionStatusEnum.scheduled,
-            )
-            session.add(new_execution)
-
-            # 2.b Queue current execution for processing
-            celery_app.send_task(
-                "app.schedular.schedular.execute_agent_run", args=[execution.id, execution.agent_id]
+        try:
+            # 1. Fetch pending executions within the window with row-level locking
+            pending_executions: List[ExecutionModel] = (
+                session.query(ExecutionModel)
+                .filter(
+                    ExecutionModel.status == ExecutionStatusEnum.scheduled,
+                    ExecutionModel.schedule_time <= window_end,
+                )
+                .with_for_update(skip_locked=True)  # Skip rows locked by other processes
+                .all()
             )
 
-            # 2.c Mark current execution as *queued*
-            execution.status = ExecutionStatusEnum.queued
+            for execution in pending_executions:
+                if execution.schedule is None:
+                    logger.warning(
+                        "Orphan execution %s - no schedule, skipping", execution.id)
+                    continue
+                
+                try:
+                    # 2.a Check if next execution already exists to prevent duplicates
+                    next_time = _compute_next_execution_time(
+                        execution.schedule, execution.schedule_time)
+                    
+                    existing_next = session.query(ExecutionModel).filter(
+                        ExecutionModel.schedule_id == execution.schedule_id,
+                        ExecutionModel.schedule_time == next_time,
+                        ExecutionModel.status == ExecutionStatusEnum.scheduled
+                    ).first()
+                    
+                    if not existing_next:
+                        # Only create if it doesn't exist
+                        new_execution = ExecutionModel(
+                            schedule_id=execution.schedule_id,
+                            agent_id=execution.agent_id,
+                            schedule_time=next_time,
+                            status=ExecutionStatusEnum.scheduled,
+                        )
+                        session.add(new_execution)
+                        session.flush()  # Flush to get the ID and catch conflicts early
 
-        # Persist all changes in one go for efficiency
-        session.commit()
+                    # 2.b Queue current execution for processing
+                    logger.info(
+                        "Queuing execution for agent processing",
+                        execution_id=execution.id,
+                        agent_id=execution.agent_id,
+                        task_name="app.services.executors.executor.run_agent"
+                    )
+                    
+                    celery_app.send_task(
+                        "app.services.executors.executor.run_agent",
+                        args=[execution.id, execution.agent_id],
+                        queue="default"
+                    )
+                    
+                    logger.info(
+                        "Successfully queued execution task",
+                        execution_id=execution.id,
+                        agent_id=execution.agent_id
+                    )
 
-    # return the number of executions processed
-    return len(pending_executions)
+                    # 2.c Mark current execution as *queued*
+                    execution.status = ExecutionStatusEnum.queued
+                    processed_count += 1
+                    
+                except Exception as e:
+                    logger.error(
+                        "Error processing execution %s: %s", 
+                        execution.id, str(e)
+                    )
+                    # Continue with other executions instead of failing the entire batch
+                    continue
+
+            # Commit all changes in one transaction
+            session.commit()
+            
+        except Exception as e:
+            logger.error("Error in process_scheduled_executions: %s", str(e))
+            session.rollback()
+            raise
+
+    logger.info("Processed %d scheduled executions", processed_count)
+    return processed_count
 
 
 # ---------------------------------------------------------------------------

@@ -244,14 +244,14 @@ class BaseAgentExecutor(ABC):
                 return results
 
             # Save results
-            # if self.save_results(results):
-            #     self.mark_execution_completed(results)
-            #     return results
-            # else:
-            #     error_msg = "Failed to save execution results"
-            #     self.mark_execution_failed(error_msg)
-            #     return {"error": error_msg}
-            print(results)
+            if self.save_results(results):
+                self.mark_execution_completed(results)
+                return results
+            else:
+                error_msg = "Failed to save execution results"
+                self.mark_execution_failed(error_msg)
+                return {"error": error_msg}
+
             return results
 
         except Exception as e:
