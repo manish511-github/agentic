@@ -1,6 +1,5 @@
 version: "3.8"
 services:
-
   ragent:
     build:
       context: ./ragent
@@ -167,6 +166,8 @@ services:
     networks:
       - market-network
     restart: unless-stopped
+    logging:
+      driver: "none" # Completely silence logs
 
   redis:
     image: redis:7

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 import structlog
 from datetime import datetime
 
-from app.models import AgentModel, ExecutionModel, ExecutionStatusEnum
+from app.models import AgentModel, ExecutionModel, ExecutionStatusEnum, OAuthAccount, ProjectModel
 from app.database import SessionLocal
 
 logger = structlog.get_logger()
@@ -34,7 +34,9 @@ class BaseAgentExecutor(ABC):
         self.db_session: Optional[Session] = None
         self.execution: Optional[ExecutionModel] = None
         self.agent: Optional[AgentModel] = None
-
+        self.project: Optional[ProjectModel] = None
+        self.oauth_account: Optional[OAuthAccount] = None
+        
     def __enter__(self):
         """Context manager entry - initialize database session."""
         self.db_session = SessionLocal()
@@ -89,6 +91,31 @@ class BaseAgentExecutor(ABC):
                     agent_id=self.agent_id
                 )
                 return False
+            
+            # Load project details for the agent
+            self.project = self.db_session.query(ProjectModel).filter(
+                ProjectModel.uuid == self.agent.project_id
+            ).first()
+
+            if not self.project:
+                logger.error(
+                    "Project not found",
+                    project_id=self.agent.project_id
+                )
+                return False
+            
+            # Load oauth account details for the agent if present
+            if self.agent.oauth_account_id:
+                self.oauth_account = self.db_session.query(OAuthAccount).filter(
+                    OAuthAccount.id == self.agent.oauth_account_id
+                ).first()
+            
+                if not self.oauth_account:
+                    logger.error(
+                        "OAuth account not found",
+                        oauth_account_id=self.agent.oauth_account_id
+                    )
+                    return False
 
             # Mark execution as running
             self.execution.status = ExecutionStatusEnum.running
@@ -122,7 +149,8 @@ class BaseAgentExecutor(ABC):
         if self.execution and self.db_session:
             self.execution.status = ExecutionStatusEnum.completed
             if results:
-                self.execution.results = results
+                # Make results JSON serializable before saving
+                self.execution.results = self._make_serializable(results)
             self.db_session.commit()
 
             logger.info(
@@ -130,6 +158,47 @@ class BaseAgentExecutor(ABC):
                 execution_id=self.execution_id,
                 agent_id=self.agent_id
             )
+
+    def _make_serializable(self, obj: Any) -> Any:
+        """
+        Convert non-serializable objects to serializable ones.
+
+        Args:
+            obj: Object to make serializable
+
+        Returns:
+            Serializable version of the object
+        """
+        if isinstance(obj, set):
+            # Convert sets to lists
+            return list(obj)
+        elif isinstance(obj, dict):
+            # Recursively handle dictionaries
+            return {k: self._make_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            # Recursively handle lists and tuples
+            return [self._make_serializable(item) for item in obj]
+        elif hasattr(obj, 'dict') and callable(obj.dict):
+            # Handle Pydantic models
+            return obj.dict()
+        elif hasattr(obj, '__dict__'):
+            # Handle other objects with __dict__
+            try:
+                return {k: self._make_serializable(v) for k, v in obj.__dict__.items() 
+                       if not k.startswith('_')}
+            except:
+                # If conversion fails, convert to string
+                return str(obj)
+        else:
+            # For basic types (str, int, float, bool, None) and unknown types
+            try:
+                # Test if it's JSON serializable
+                import json
+                json.dumps(obj)
+                return obj
+            except (TypeError, ValueError):
+                # If not serializable, convert to string
+                return str(obj)
 
     def mark_execution_failed(self, error_message: str):
         """
@@ -140,7 +209,7 @@ class BaseAgentExecutor(ABC):
         """
         if self.execution and self.db_session:
             self.execution.status = ExecutionStatusEnum.failed
-            self.execution.results = {"error": error_message}
+            self.execution.results = self._make_serializable({"error": error_message})
             self.db_session.commit()
 
             logger.error(
@@ -151,7 +220,7 @@ class BaseAgentExecutor(ABC):
             )
 
     @abstractmethod
-    def create_initial_state(self) -> Dict[str, Any]:
+    def create_initial_state(self) -> Dict[str, Any]:   
         """
         Create the initial state for the agent workflow.
 
@@ -224,6 +293,8 @@ class BaseAgentExecutor(ABC):
                 error_msg = "Failed to save execution results"
                 self.mark_execution_failed(error_msg)
                 return {"error": error_msg}
+
+            return results
 
         except Exception as e:
             error_msg = f"Agent execution failed: {str(e)}"

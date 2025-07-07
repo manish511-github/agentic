@@ -16,6 +16,50 @@ nest_asyncio.apply()
 logger = structlog.get_logger()
 
 
+def _make_result_serializable(obj: Any) -> Any:
+    """
+    Convert non-serializable objects in task results to serializable ones.
+    
+    This is needed because Celery tries to JSON serialize task results for storage.
+    
+    Args:
+        obj: Object to make serializable
+        
+    Returns:
+        Serializable version of the object
+    """
+    if isinstance(obj, set):
+        # Convert sets to lists
+        return list(obj)
+    elif isinstance(obj, dict):
+        # Recursively handle dictionaries
+        return {k: _make_result_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        # Recursively handle lists and tuples
+        return [_make_result_serializable(item) for item in obj]
+    elif hasattr(obj, 'dict') and callable(obj.dict):
+        # Handle Pydantic models
+        return obj.dict()
+    elif hasattr(obj, '__dict__'):
+        # Handle other objects with __dict__
+        try:
+            return {k: _make_result_serializable(v) for k, v in obj.__dict__.items() 
+                   if not k.startswith('_')}
+        except:
+            # If conversion fails, convert to string
+            return str(obj)
+    else:
+        # For basic types (str, int, float, bool, None) and unknown types
+        try:
+            # Test if it's JSON serializable
+            import json
+            json.dumps(obj)
+            return obj
+        except (TypeError, ValueError):
+            # If not serializable, convert to string
+            return str(obj)
+
+
 def _get_execution_and_agent(execution_id: int, agent_id: int) -> tuple[Optional[ExecutionModel], Optional[AgentModel]]:
     """
     Retrieve execution and agent data from database.
@@ -202,7 +246,7 @@ def run_agent(self, execution_id: int, agent_id: int) -> Dict[str, Any]:
         finally:
             loop.close()
 
-        # Step 5: Handle results
+        # Step 5: Handle results and make them JSON serializable for Celery
         if result.get("error"):
             logger.error(
                 "Agent execution completed with error",
@@ -218,7 +262,9 @@ def run_agent(self, execution_id: int, agent_id: int) -> Dict[str, Any]:
                 platform=agent.agent_platform
             )
 
-        return result
+        # Make result JSON serializable for Celery result backend
+        serializable_result = _make_result_serializable(result)
+        return serializable_result
 
     except Exception as e:
         error_msg = f"Task execution failed: {str(e)}"

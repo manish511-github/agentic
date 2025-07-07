@@ -1,5 +1,5 @@
 from langgraph.graph import StateGraph, END
-from .state import AgentState
+from .state import RedditAgentState
 from .nodes.validate_goals import validate_input_node
 from .nodes.search_posts_directly import search_posts_directly_node
 from .nodes.search_subreddits import search_subreddits_node
@@ -11,7 +11,7 @@ import asyncio
 
 
 def create_reddit_graph() -> StateGraph:
-    graph = StateGraph(AgentState)
+    graph = StateGraph(RedditAgentState)
     graph.add_node("validate_input", validate_input_node)
     graph.add_node("generate_queries_node", generate_queries_node)
     graph.add_node("search_posts_directly_node", search_posts_directly_node)
@@ -28,7 +28,7 @@ def create_reddit_graph() -> StateGraph:
 # Basic Reddit Agent Call -
 
 def create_basic_reddit_graph() -> StateGraph:
-    graph = StateGraph(AgentState)
+    graph = StateGraph(RedditAgentState)
     graph.add_node("validate_input", validate_input_node)
     graph.add_node("generate_queries_node", generate_queries_node)
     graph.add_node("search_posts_directly_node", search_posts_directly_node)
@@ -45,12 +45,13 @@ def create_basic_reddit_graph() -> StateGraph:
 # Parallel Reddit Agent Call (true parallel using asyncio.gather in a node)
 async def parallel_reddit_node(state):
     async def direct_search_branch():
-        return {"direct_posts": await search_posts_directly_node(state.copy())}
+        result_state = await search_posts_directly_node(state.copy())
+        return {"direct_posts": result_state.get("direct_posts", [])}
         
     async def subreddit_branch():
         sub_state = await search_subreddits_node(state.copy())
         fetch_state = await fetch_basic_post_nodes(sub_state)
-        return {"subreddit_posts": fetch_state}
+        return {"subreddit_posts": fetch_state.get("subreddit_posts", [])}
     result1, result2 = await asyncio.gather(direct_search_branch(), subreddit_branch())
     state.update(result1)
     state.update(result2)
@@ -59,19 +60,20 @@ async def parallel_reddit_node(state):
 # Parallel Reddit Agent Call (true parallel using asyncio.gather in a node)
 async def parallel_advanced_reddit_node(state):
     async def direct_search_branch():
-        return {"direct_posts": await search_posts_directly_node(state.copy())}
+        result_state = await search_posts_directly_node(state.copy())
+        return {"direct_posts": result_state.get("direct_posts", [])}
         
     async def subreddit_branch():
         sub_state = await search_subreddits_node(state.copy())
         fetch_state = await fetch_posts_node(sub_state)
-        return {"subreddit_posts": fetch_state}
+        return {"subreddit_posts": fetch_state.get("posts", [])}
     result1, result2 = await asyncio.gather(direct_search_branch(), subreddit_branch())
     state.update(result1)
     state.update(result2)
     return state
 
 def create_parallel_advanced_reddit_graph() -> StateGraph:
-    graph = StateGraph(AgentState)
+    graph = StateGraph(RedditAgentState)
     graph.add_node("validate_input", validate_input_node)
     graph.add_node("generate_queries_node", generate_queries_node)
     graph.add_node("parallel_advanced_reddit_node", parallel_advanced_reddit_node)
@@ -82,7 +84,7 @@ def create_parallel_advanced_reddit_graph() -> StateGraph:
     return graph.compile()
 
 def create_parallel_reddit_graph() -> StateGraph:
-    graph = StateGraph(AgentState)
+    graph = StateGraph(RedditAgentState)
     graph.add_node("validate_input", validate_input_node)
     graph.add_node("generate_queries_node", generate_queries_node)
     graph.add_node("parallel_reddit_node", parallel_reddit_node)

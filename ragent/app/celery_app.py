@@ -42,6 +42,8 @@ celery_app.conf.task_queues = (
 celery_app.conf.task_routes = {
     # All tasks defined in the scheduler module go to the dedicated queue
     "app.schedular.schedular.*": {"queue": "scheduler"},
+    # Executor tasks go to the default queue
+    "app.services.executors.executor.*": {"queue": "default"},
 }
 
 # Optional: Configure periodic tasks

@@ -128,6 +128,11 @@ class RedditPostModel(Base):
     post_url = Column(String)
     created_utc = Column(DateTime)
     upvotes = Column(Integer)
+    comment_count = Column(Integer, default=0)
+    
+    # Combined text for embeddings/search (this is core post data, not execution-specific)
+    text = Column(Text)  # Combined title + body text
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # create an index on post_id
@@ -169,7 +174,7 @@ class AgentModel(Base):
     goals = Column(String)
     instructions = Column(String)
     expectations = Column(String)
-    keywords = Column(ARRAY(String))
+    agent_keywords = Column(ARRAY(String))
     project_id = Column(String, ForeignKey("projects.uuid"))
     mode = Column(String, default="copilot")  # copilot, autonomous
     review_minutes = Column(Integer, nullable=True)
@@ -262,7 +267,19 @@ class RedditAgentExecutionMapperModel(Base):
     execution_id = Column(Integer, ForeignKey("executions.id"))
     agent_id = Column(Integer, ForeignKey("agents.id"))
     post_id = Column(String, ForeignKey("reddit_posts.post_id"))
-    relevance_score = Column(Float)
+    
+    # Relevance scores from agent analysis
+    relevance_score = Column(Float)  # Legacy/primary relevance score
+    keyword_relevance = Column(Float, nullable=True)
+    semantic_relevance = Column(Float, nullable=True)
+    combined_relevance = Column(Float, nullable=True)
+    llm_relevance = Column(Float, nullable=True)
+    
+    # Processing metadata
+    matched_query = Column(String, nullable=True)
+    sort_method = Column(String, nullable=True)
+    
+    # Agent output and processing
     comment_draft = Column(String)
     status = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
