@@ -149,7 +149,8 @@ class BaseAgentExecutor(ABC):
         if self.execution and self.db_session:
             self.execution.status = ExecutionStatusEnum.completed
             if results:
-                self.execution.results = results
+                # Make results JSON serializable before saving
+                self.execution.results = self._make_serializable(results)
             self.db_session.commit()
 
             logger.info(
@@ -157,6 +158,47 @@ class BaseAgentExecutor(ABC):
                 execution_id=self.execution_id,
                 agent_id=self.agent_id
             )
+
+    def _make_serializable(self, obj: Any) -> Any:
+        """
+        Convert non-serializable objects to serializable ones.
+
+        Args:
+            obj: Object to make serializable
+
+        Returns:
+            Serializable version of the object
+        """
+        if isinstance(obj, set):
+            # Convert sets to lists
+            return list(obj)
+        elif isinstance(obj, dict):
+            # Recursively handle dictionaries
+            return {k: self._make_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            # Recursively handle lists and tuples
+            return [self._make_serializable(item) for item in obj]
+        elif hasattr(obj, 'dict') and callable(obj.dict):
+            # Handle Pydantic models
+            return obj.dict()
+        elif hasattr(obj, '__dict__'):
+            # Handle other objects with __dict__
+            try:
+                return {k: self._make_serializable(v) for k, v in obj.__dict__.items() 
+                       if not k.startswith('_')}
+            except:
+                # If conversion fails, convert to string
+                return str(obj)
+        else:
+            # For basic types (str, int, float, bool, None) and unknown types
+            try:
+                # Test if it's JSON serializable
+                import json
+                json.dumps(obj)
+                return obj
+            except (TypeError, ValueError):
+                # If not serializable, convert to string
+                return str(obj)
 
     def mark_execution_failed(self, error_message: str):
         """
@@ -167,7 +209,7 @@ class BaseAgentExecutor(ABC):
         """
         if self.execution and self.db_session:
             self.execution.status = ExecutionStatusEnum.failed
-            self.execution.results = {"error": error_message}
+            self.execution.results = self._make_serializable({"error": error_message})
             self.db_session.commit()
 
             logger.error(

@@ -170,7 +170,7 @@ async def fetch_basic_post_nodes(state: RedditAgentState) -> RedditAgentState:
                 all_scores.extend(scores)
             for post, score in zip(posts, all_scores):
                 post.llm_relevance = score
-            logger.info("Fetch posts completed", agent_name=state["agent_name"], posts_count=(posts))
+            logger.info("Fetch posts completed", agent_name=state["agent_name"], posts_count=len(posts))
             state["subreddit_posts"] = posts
     except Exception as e:
         state["error"] = f"Post fetching failed: {str(e)}"

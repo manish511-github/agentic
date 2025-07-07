@@ -187,7 +187,33 @@ class RedditResultMapper(ResultMapper):
             posts = results.get("posts", [])
             if not posts:
                 # Try alternative locations in case of different agent versions
-                posts = results.get("subreddit_posts", []) + results.get("direct_posts", [])
+                # Combine posts from multiple sources and deduplicate by post_id
+                all_posts = results.get("subreddit_posts", []) + results.get("direct_posts", [])
+                
+                # Deduplicate posts by post_id (keep first occurrence)
+                seen_post_ids = set()
+                posts = []
+                duplicates_found = 0
+                
+                for post in all_posts:
+                    post_id = getattr(post, 'post_id', None)
+                    if post_id and post_id not in seen_post_ids:
+                        posts.append(post)
+                        seen_post_ids.add(post_id)
+                    elif post_id in seen_post_ids:
+                        duplicates_found += 1
+                        logger.debug(
+                            "Duplicate post found during extraction, skipping",
+                            post_id=post_id
+                        )
+                
+                if duplicates_found > 0:
+                    logger.info(
+                        "Deduplicated posts during extraction",
+                        total_from_sources=len(all_posts),
+                        unique_posts=len(posts),
+                        duplicates_removed=duplicates_found
+                    )
 
             # Save Reddit-specific data if we have posts
             if posts:
@@ -243,8 +269,32 @@ class RedditResultMapper(ResultMapper):
         if not posts:
             return
 
+        # First, deduplicate within the current batch (keep first occurrence)
+        seen_in_batch = set()
+        unique_posts = []
+        duplicates_in_batch = 0
+        
+        for post in posts:
+            if post.post_id and post.post_id not in seen_in_batch:
+                unique_posts.append(post)
+                seen_in_batch.add(post.post_id)
+            elif post.post_id in seen_in_batch:
+                duplicates_in_batch += 1
+                logger.debug(
+                    "Duplicate post found in batch, skipping",
+                    post_id=post.post_id
+                )
+
+        if duplicates_in_batch > 0:
+            logger.info(
+                "Deduplicated posts within batch",
+                total_posts=len(posts),
+                unique_posts=len(unique_posts),
+                duplicates_removed=duplicates_in_batch
+            )
+
         # Collect post IDs to check for existing posts in bulk
-        post_ids = [post.post_id for post in posts if post.post_id]
+        post_ids = [post.post_id for post in unique_posts if post.post_id]
         existing_posts = set()
         
         if post_ids:
@@ -254,12 +304,12 @@ class RedditResultMapper(ResultMapper):
             existing_posts = {row[0] for row in existing_query.all()}
 
         posts_to_add = []
-        for post in posts:
+        for post in unique_posts:
             post_id = post.post_id
             if not post_id or post_id in existing_posts:
                 if post_id in existing_posts:
                     logger.debug(
-                        "Reddit post already exists, skipping",
+                        "Reddit post already exists in database, skipping",
                         post_id=post_id
                     )
                 continue
@@ -322,11 +372,46 @@ class RedditResultMapper(ResultMapper):
         Args:
             posts: List of RedditPost objects from Reddit agent
         """
+        logger.info(
+            "Saving Reddit execution mappings",
+            execution_id=self.execution_id,
+            agent_id=self.agent.id,
+            posts_count=len(posts) if posts else 0
+        )
         if not posts:
+            logger.info(
+                "No posts found in Reddit execution mapping batch",
+                execution_id=self.execution_id,
+                agent_id=self.agent.id
+            )
             return
 
+        # First, deduplicate within the current batch (keep first occurrence)
+        seen_in_batch = set()
+        unique_posts = []
+        duplicates_in_batch = 0
+        
+        for post in posts:
+            if post.post_id and post.post_id not in seen_in_batch:
+                unique_posts.append(post)
+                seen_in_batch.add(post.post_id)
+            elif post.post_id in seen_in_batch:
+                duplicates_in_batch += 1
+                logger.debug(
+                    "Duplicate post found in execution mapping batch, skipping",
+                    post_id=post.post_id
+                )
+
+        if duplicates_in_batch > 0:
+            logger.info(
+                "Deduplicated execution mappings within batch",
+                total_posts=len(posts),
+                unique_posts=len(unique_posts),
+                duplicates_removed=duplicates_in_batch
+            )
+
         # Collect existing mappings to avoid duplicates
-        post_ids = [post.post_id for post in posts if post.post_id]
+        post_ids = [post.post_id for post in unique_posts if post.post_id]
         existing_mappings = set()
         
         if post_ids:
@@ -338,14 +423,14 @@ class RedditResultMapper(ResultMapper):
                 RedditAgentExecutionMapperModel.post_id.in_(post_ids)
             )
             existing_mappings = {row[0] for row in existing_query.all()}
-
+        logger.info(f"Existing mappings: {len(existing_mappings)}")
         mappings_to_add = []
-        for post in posts:
+        for post in unique_posts:
             post_id = post.post_id
             if not post_id or post_id in existing_mappings:
                 if post_id in existing_mappings:
                     logger.debug(
-                        "Reddit execution mapping already exists, skipping",
+                        "Reddit execution mapping already exists in database, skipping",
                         execution_id=self.execution_id,
                         post_id=post_id
                     )

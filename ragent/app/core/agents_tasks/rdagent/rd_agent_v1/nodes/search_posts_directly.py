@@ -301,7 +301,6 @@ async def search_posts_directly_node(state: RedditAgentState) -> RedditAgentStat
         logger.info("Direct post search completed with semantic ranking", agent_name=state["agent_name"], posts_found=len(
             state["posts"]), unique_queries_used=search_queries)
     except Exception as e:
-        print(e)
         state["error"] = f"Direct post search failed: {str(e)}"
-        logger.error("Direct post search failed", error=e)
+        logger.error("Direct post search failed", error=str(e))
     return state

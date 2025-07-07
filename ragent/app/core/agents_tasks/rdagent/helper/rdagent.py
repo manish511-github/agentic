@@ -212,7 +212,7 @@ async def generate_keywords(keywords: List[str], expectation: str) -> List[str]:
             logger.warning("LLM returned invalid JSON: %s", raw_output)
             raise e
         result = list(set(keywords + expanded))[:15]
-        logger.info(result)
+        logger.info("Generated keywords", keywords_count=len(result), keywords=result[:5])  # Only log first 5 keywords
         # await redis_client.setex(cache_key, 3600, json.dumps(result))
         return result
     except Exception as e:
@@ -425,7 +425,7 @@ async def search_subreddits_node(state: AgentState) -> AgentState:
                             limit=min(LLM_BATCH_SIZE, FINAL_SUBREDDIT_LIMIT - len(final_subreddits))
                         )
                         batch_results = json.loads(result)
-                        logger.info(batch_results)
+                        logger.info("LLM batch results", results_count=len(batch_results), results=batch_results[:3])  # Only log first 3 results
                         # await redis_client.setex(batch_cache_key, 3600, json.dumps(batch_results))
                     except json.JSONDecodeError as e:
                         logger.warning("LLM batch failed - JSON decode error", error=str(e))
@@ -529,7 +529,7 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
                         ('new', subreddit.new(limit=25)),
                         ('top', subreddit.top('week', limit=25))
                     ]
-                    print(listings)
+                    logger.debug("Processing listings", subreddit=subreddit_name, listing_count=len(listings))
                     # Collect candidate posts
                     candidates = []
                     for sort_method, listing in listings:
@@ -540,7 +540,6 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
                                 "title": submission.title,
                                 "selftext": submission.selftext
                             })
-                    print(listings)
                     if not candidates:
                         return posts
 

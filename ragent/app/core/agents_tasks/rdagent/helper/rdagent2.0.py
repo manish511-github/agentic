@@ -218,7 +218,7 @@ async def generate_keywords(keywords: List[str], expectation: str) -> List[str]:
             logger.warning("LLM returned invalid JSON: %s", raw_output)
             raise e
         result = list(set(keywords + expanded))[:15]
-        logger.info(result)
+        logger.info("Generated keywords", keywords_count=len(result), keywords=result[:5])  # Only log first 5 keywords
         # await redis_client.setex(cache_key, 3600, json.dumps(result))
         return result
     except Exception as e:
@@ -478,7 +478,13 @@ async def fetch_posts_node(state: AgentState) -> AgentState:
                                 }
                                 subreddit_posts.append(post_data)
                                 subreddit_keyword_matches += keyword_matches
-                                logger.info(f"Found post in {subreddit_name}: {submission.title}")
+                                # logger.info(f"Found post in {subreddit_name}: {submission.title}")
+                                logger.info(
+                                    "found_post",
+                                    post_id=post_data["post_id"],
+                                    subreddit=subreddit_name,
+                                    title=submission.title[:80]  # Truncate for brevity
+                                )
                             
                             # Add a 3-second delay between searches to respect rate limits
                             await asyncio.sleep(3)  # 3 seconds delay between searches
