@@ -169,7 +169,7 @@ class Agent(AgentBase):
 class AgentResult(BaseModel):
     id: int
     agent_id: int
-    project_id: int
+    project_id: str  # Changed to str since it's a UUID
     status: str
     results: Optional[Dict] = None
     error: Optional[str] = None
