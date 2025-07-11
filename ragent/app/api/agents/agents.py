@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Body
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func, desc
 from typing import List
 import uuid
 from datetime import datetime, timezone
@@ -331,84 +331,112 @@ async def get_agent_results(
             detail="Agent not found or you don't have access to it"
         )
 
-    # Get results
-    result = await db.execute(
-        select(models.AgentResultModel)
-        .filter(models.AgentResultModel.agent_id == agent_id)
-        .order_by(models.AgentResultModel.created_at.desc())
-    )
-    results = result.scalars().all()
+    # Base result structure
+    result_data = {
+        "agent_platform": agent.agent_platform,
+        "posts": []
+    }
 
-    # Get associated posts for each result
-    for result_item in results:
-        if result_item.status == "completed" and result_item.results:
-            # Add agent_platform to results
-            result_item.results["agent_platform"] = agent.agent_platform
+    # Handle platform-specific post retrieval
+    if agent.agent_platform == "reddit":
+        # Get all Reddit analysis results for this agent with post data
+        # Simple approach: get all records and deduplicate in Python
+        
+        # Get all mapper records for this agent with post data
+        posts_result = await db.execute(
+            select(
+                models.RedditAgentExecutionMapperModel,
+                models.RedditPostModel
+            )
+            .join(
+                models.RedditPostModel,
+                models.RedditAgentExecutionMapperModel.post_id == models.RedditPostModel.post_id
+            )
+            .filter(models.RedditAgentExecutionMapperModel.agent_id == agent_id)
+            .order_by(
+                models.RedditAgentExecutionMapperModel.post_id,
+                desc(models.RedditAgentExecutionMapperModel.created_at)
+            )
+        )
+        
+        all_execution_posts = posts_result.all()
+        
+        # Deduplicate by post_id, keeping the latest execution for each post
+        seen_posts = {}
+        for row in all_execution_posts:
+            mapper_data = row[0]  # First element is RedditAgentExecutionMapperModel
+            post_data = row[1]    # Second element is RedditPostModel
+            
+            if post_data.post_id not in seen_posts:
+                seen_posts[post_data.post_id] = (mapper_data, post_data)
+        
+        # Convert to list and sort by combined_relevance
+        unique_posts = list(seen_posts.values())
+        unique_posts.sort(key=lambda x: x[0].combined_relevance or 0, reverse=True)
+        
+        if unique_posts:
+            result_data["posts"] = [
+                {
+                    # Post data from RedditPostModel
+                    "subreddit": post_data.subreddit,
+                    "post_id": post_data.post_id,
+                    "post_title": post_data.post_title,
+                    "post_body": post_data.post_body,
+                    "post_url": post_data.post_url,
+                    "upvotes": post_data.upvotes,
+                    "comment_count": post_data.comment_count,
+                    "created_utc": post_data.created_utc.isoformat() if post_data.created_utc else None,
+                    
+                    # Analysis results from RedditAgentExecutionMapperModel (latest execution)
+                    "execution_id": mapper_data.execution_id,
+                    "relevance_score": mapper_data.relevance_score,
+                    "keyword_relevance": mapper_data.keyword_relevance,
+                    "semantic_relevance": mapper_data.semantic_relevance,
+                    "combined_relevance": mapper_data.combined_relevance,
+                    "llm_relevance": mapper_data.llm_relevance,
+                    "matched_query": mapper_data.matched_query,
+                    "sort_method": mapper_data.sort_method,
+                    "comment_draft": mapper_data.comment_draft,
+                    "status": mapper_data.status,
+                    "analysis_created_at": mapper_data.created_at.isoformat() if mapper_data.created_at else None
+                }
+                for mapper_data, post_data in unique_posts
+            ]
+    
+    elif agent.agent_platform == "twitter":
+        # Get Twitter posts for this agent (no mapper pattern yet)
+        posts_result = await db.execute(
+            select(models.TwitterPostModel)
+            .filter(models.TwitterPostModel.agent_name == agent.agent_name)
+            .order_by(models.TwitterPostModel.created.desc())
+        )
+        posts = posts_result.scalars().all()
 
-            if agent.agent_platform == "reddit":
-                # Get posts from RedditPostModel for this agent, sorted by relevance score
-                posts_result = await db.execute(
-                    select(models.RedditPostModel)
-                    .filter(
-                        models.RedditPostModel.agent_name == agent.agent_name,
-                        models.RedditPostModel.created_at >= result_item.created_at
-                    )
-                    .order_by(models.RedditPostModel.combined_relevance.desc())
-                )
-                posts = posts_result.scalars().all()
+        if posts:
+            result_data["posts"] = [
+                {
+                    "tweet_id": post.tweet_id,
+                    "text": post.text,
+                    "user_name": post.user_name,
+                    "user_screen_name": post.user_screen_name,
+                    "retweet_count": post.retweet_count,
+                    "favorite_count": post.favorite_count,
+                    "relevance_score": post.relevance_score,
+                    "hashtags": post.hashtags,
+                    "created_at": post.created.isoformat() if post.created else None
+                }
+                for post in posts
+            ]
 
-                # Add posts to the results
-                if posts:
-                    result_item.results["posts"] = [
-                        {
-                            "subreddit": post.subreddit,
-                            "post_id": post.post_id,
-                            "post_title": post.post_title,
-                            "post_body": post.post_body,
-                            "post_url": post.post_url,
-                            "keyword_relevance": post.keyword_relevance,
-                            "matched_query": post.matched_query,
-                            "semantic_relevance": post.semantic_relevance,
-                            "combined_relevance": post.combined_relevance,
-                            "comment_draft": post.comment_draft,
-                            "status": post.status,
-                            "created_at": post.created_at.isoformat()
-                        }
-                        for post in posts
-                    ]
-            elif agent.agent_platform == "twitter":
-                # Get posts from TwitterPostModel for this agent
-                # Convert result_item.created_at to UTC if it has timezone info
-                created_at = result_item.created_at
-                if created_at.tzinfo is not None:
-                    created_at = created_at.astimezone(
-                        timezone.utc).replace(tzinfo=None)
-
-                posts_result = await db.execute(
-                    select(models.TwitterPostModel)
-                    .filter(
-                        models.TwitterPostModel.agent_name == agent.agent_name,
-                        models.TwitterPostModel.created >= created_at
-                    )
-                    .order_by(models.TwitterPostModel.created.desc())
-                )
-                posts = posts_result.scalars().all()
-
-                # Add posts to the results
-                if posts:
-                    result_item.results["posts"] = [
-                        {
-                            "tweet_id": post.tweet_id,
-                            "text": post.text,
-                            "user_name": post.user_name,
-                            "user_screen_name": post.user_screen_name,
-                            "retweet_count": post.retweet_count,
-                            "favorite_count": post.favorite_count,
-                            "relevance_score": post.relevance_score,
-                            "hashtags": post.hashtags,
-                            "created_at": post.created.isoformat() if post.created else None
-                        }
-                        for post in posts
-                    ]
-
-    return results
+    # Create a single AgentResult response with all posts
+    agent_result = {
+        "id": agent_id,  # Use agent_id as the result id
+        "agent_id": agent_id,
+        "project_id": agent.project_id,
+        "status": "completed" if result_data["posts"] else "no_results",
+        "results": result_data,
+        "error": None,
+        "created_at": datetime.now(timezone.utc)  # Current timestamp
+    }
+    
+    return [schemas.AgentResult.model_validate(agent_result)]
